@@ -540,6 +540,15 @@ async def call_status(request: Request):
             "failed",
             "no-answer"
         ]
+        # LIVE STATUS UI
+        if status == "ringing":
+            call_status_ui = "Ringing"
+
+        elif status == "answered":
+            call_status_ui = "Answered"
+
+        elif status == "in-progress":
+            call_status_ui = "In Progress"
 
         if status not in FINAL_STATES:
             return Response("ok")
@@ -646,19 +655,11 @@ def make_call(to_number, client=None):
 
     url     = f"https://api.exotel.com/v1/Accounts/{EXOTEL_SID}/Calls/connect.json"
     payload = {
-        "From": to_number,
-        "CallerId": EXOTEL_NUMBER,
-        "Url": BASE_URL + "/voice",
-        "Method": "POST",
-
-        # IMPORTANT
-        "StatusCallback": BASE_URL + "/status",
-        "StatusCallbackMethod": "POST",
-
-        # VERY IMPORTANT
-        "StatusCallbackEvents": "terminal",
-
-        "TimeOut": 30
+        "From"          : to_number,
+        "CallerId"      : EXOTEL_NUMBER,
+        "Url"           : "http://my.exotel.com/voicetunesindia1/exoml/start_voice/1199576",
+        "TimeOut"       : 30,
+        "StatusCallback": BASE_URL + "/status"
     }
 
     print("📲 Calling:", to_number)
