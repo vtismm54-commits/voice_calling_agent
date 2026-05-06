@@ -44,7 +44,7 @@ app.add_middleware(
 # ================= CONFIG =================
 SARVAM_API_KEY   = os.getenv("SARVAM_API_KEY")
 SARVAM_TTS_URL   = "https://api.sarvam.ai/text-to-speech"
-BASE_URL         = os.getenv("BASE_URL", "https://unmagnanimous-undelayingly-laraine.ngrok-free.dev")
+BASE_URL         = os.getenv("BASE_URL", "https://voice-calling-agent-1f3f.onrender.com")
 EXOTEL_SID       = os.getenv("EXOTEL_SID")
 EXOTEL_API_KEY   = os.getenv("EXOTEL_API_KEY")
 EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN")
