@@ -646,11 +646,19 @@ def make_call(to_number, client=None):
 
     url     = f"https://api.exotel.com/v1/Accounts/{EXOTEL_SID}/Calls/connect.json"
     payload = {
-        "From"          : to_number,
-        "CallerId"      : EXOTEL_NUMBER,
-        "Url"           : "http://my.exotel.com/voicetunesindia1/exoml/start_voice/1199576",
-        "TimeOut"       : 30,
-        "StatusCallback": BASE_URL + "/status"
+        "From": to_number,
+        "CallerId": EXOTEL_NUMBER,
+        "Url": BASE_URL + "/voice",
+        "Method": "POST",
+
+        # IMPORTANT
+        "StatusCallback": BASE_URL + "/status",
+        "StatusCallbackMethod": "POST",
+
+        # VERY IMPORTANT
+        "StatusCallbackEvents": "terminal",
+
+        "TimeOut": 30
     }
 
     print("📲 Calling:", to_number)
