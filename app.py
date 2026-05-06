@@ -610,7 +610,10 @@ async def transfer_fallback(request: Request):
 # ================= DASHBOARD =================
 @app.api_route("/", methods=["GET", "HEAD"])
 async def dashboard(request: Request):
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html"
+    )
 
 
 @app.get("/call_status_ui")
@@ -649,7 +652,10 @@ async def get_clients():
 
 @app.get("/logs")
 async def logs_page(request: Request):
-    return templates.TemplateResponse("logs.html", {"request": request})
+    return templates.TemplateResponse(
+        request=request,
+        name="logs.html"
+    )
 
 
 @app.get("/api/logs")
