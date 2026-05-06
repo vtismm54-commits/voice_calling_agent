@@ -608,7 +608,7 @@ async def transfer_fallback(request: Request):
 
 
 # ================= DASHBOARD =================
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def dashboard(request: Request):
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
