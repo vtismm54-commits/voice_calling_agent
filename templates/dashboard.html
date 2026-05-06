@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Voice AI Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<div class="layout">
+
+    <!-- SIDEBAR -->
+    <div class="sidebar">
+        <h2 class="logo">Voice Tunes India</h2>
+
+        <a href="/" class="nav-item active">Dashboard</a>
+        <a href="/logs" class="nav-item">Call Logs</a>
+    </div>
+
+
+    <!-- MAIN AREA -->
+    <div class="main">
+
+        <!-- TOP NAV -->
+        <div class="topbar">
+            <h1>Voice Tunes AI Control Panel</h1>
+            <div class="top-buttons">
+                <button id="startBtn" class="btn start">Start</button>
+                <button id="pauseBtn" class="btn pause">Pause</button>
+                <button id="resumeBtn" class="btn resume">Resume</button>
+                <button id="cutBtn" class="btn stop">End</button>
+            </div>
+        </div>
+
+
+        <!-- STATS -->
+        <div class="stats">
+            <!-- <div class="card">
+                <h3>Call Timer</h3>
+                <p id="timer">00:00</p>
+            </div> -->
+
+            <div class="card">
+                <h3>Lead Score</h3>
+                <p id="leadScore" style="cursor:pointer; color:#ffd632; font-weight:600;">--</p>
+            </div>
+
+            <div class="card" >
+    <h3>Call Status</h3>
+    <p id="callStatus">Idle</p>
+</div>
+        </div>
+
+        
+
+
+        <!-- TRANSCRIPTION -->
+        <div class="transcription">
+    <div style="
+    width:100%;
+    margin-top:25px;
+    background:#0f172a;
+    border-radius:18px;
+    overflow:hidden;
+    border:1px solid rgba(255,255,255,0.06);
+">
+
+    <!-- HEADER -->
+    <div style="
+        height:55px;
+        background:#111827;
+        display:flex;
+        align-items:center;
+        padding:0 18px;
+        border-bottom:1px solid rgba(255,255,255,0.05);
+    ">
+
+        <div style="
+            display:flex;
+            gap:8px;
+            margin-right:14px;
+        ">
+            <div style="
+                width:12px;
+                height:12px;
+                border-radius:50%;
+                background:#ef4444;
+            "></div>
+
+            <div style="
+                width:12px;
+                height:12px;
+                border-radius:50%;
+                background:#facc15;
+            "></div>
+
+            <div style="
+                width:12px;
+                height:12px;
+                border-radius:50%;
+                background:#22c55e;
+            "></div>
+        </div>
+
+        <span style="
+            color:#d1d5db;
+            font-size:15px;
+            font-weight:600;
+            font-family:monospace;
+        ">
+            Live Terminal Logs
+        </span>
+
+    </div>
+
+    <!-- TERMINAL -->
+    <div 
+        id="liveTerminal"
+        style="
+            height:450px;
+            overflow-y:auto;
+            padding:18px;
+            background:#020617;
+            color:#22c55e;
+            font-size:14px;
+            line-height:1.7;
+            font-family:Consolas,monospace;
+            white-space:pre-wrap;
+        "
+    ></div>
+
+</div>
+</div>
+
+<div class="csv-section">
+    <h2>Upload Client CSV</h2>
+
+    <input type="file" id="csvFile" accept=".csv" />
+
+    <button onclick="uploadCSV()">
+        Upload CSV
+    </button>
+
+    <button onclick="deleteAllClients()" style="background:red;color:white;">
+        Delete All Clients
+    </button>
+</div>
+
+<hr>
+<div class="queue">
+<h2>Client List</h2>
+<table border="1" id="clientTable">
+    <thead></thead>
+    <tbody></tbody>
+</table>
+        
+</div>
+
+
+    </div>
+</div>
+
+<script src="/static/js/dashboard.js"></script>
+
+<div id="toast" class="toast"></div>
+<div id="leadModal" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="closeLeadModal()">×</span>
+        <h2>Client Details</h2>
+        <div id="leadDetails" style="white-space: pre-wrap;"></div>
+    </div>
+</div>
+</body>
+</html>

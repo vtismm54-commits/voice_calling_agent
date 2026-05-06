@@ -1,0 +1,333 @@
+/* ===============================
+   GLOBAL
+================================= */
+
+body {
+    margin: 0;
+    font-family: 'Segoe UI', sans-serif;
+    background: #f9fafb;   /* light grey white */
+    color: #111;
+}
+
+/* Layout */
+.layout {
+    display: flex;
+    height: 100vh;
+}
+
+/* ===============================
+   SIDEBAR
+================================= */
+
+.sidebar {
+    width: 240px;
+    background: #ffffff;
+    padding: 30px 20px;
+    display: flex;
+    flex-direction: column;
+    border-right: 2px solid #f3f4f6;
+}
+
+.logo {
+    margin-bottom: 40px;
+    font-weight: 700;
+    font-size: 20px;
+    color: #111;
+}
+
+.nav-item {
+    color: #444;
+    text-decoration: none;
+    padding: 12px 15px;
+    border-radius: 10px;
+    margin-bottom: 10px;
+    transition: all 0.3s ease;
+}
+
+.nav-item:hover,
+.nav-item.active {
+    background: #facc15;   /* yellow */
+    color: #000;
+    font-weight: 600;
+}
+
+/* ===============================
+   MAIN CONTENT
+================================= */
+
+.main {
+    flex: 1;
+    padding: 30px;
+    overflow-y: auto;
+}
+
+/* ===============================
+   TOPBAR
+================================= */
+
+.topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.topbar h1 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+/* ===============================
+   BUTTONS
+================================= */
+
+.btn {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: 0.2s ease;
+}
+
+.start {
+    background: #facc15;
+    color: #000;
+}
+
+.pause {
+    background: #111;
+    color: #fff;
+}
+
+.resume {
+    background: #fde047;
+    color: #000;
+}
+
+.stop {
+    background: #ef4444;
+    color: white;
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 15px rgba(0,0,0,0.1);
+}
+
+/* ===============================
+   STATS CARDS
+================================= */
+
+.stats {
+    display: flex;
+    gap: 20px;
+    margin: 30px 0;
+}
+
+.card {
+    flex: 1;
+    background: #ffffff;
+    padding: 25px;
+    border-radius: 14px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.05);
+}
+
+.card h3 {
+    margin-bottom: 10px;
+    font-weight: 600;
+}
+
+/* ===============================
+   TABLES
+================================= */
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.05);
+}
+
+th {
+    background: #facc15;
+    color: #000;
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+}
+
+td {
+    padding: 12px;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+tr:hover {
+    background: #fff9db;
+}
+
+/* ===============================
+   TRANSCRIPTION
+================================= */
+
+.transcription {
+    background: white;
+    padding: 20px;
+    border-radius: 14px;
+    margin-bottom: 30px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.05);
+}
+
+#transcriptBox {
+    background: #f3f4f6;
+    height: 200px;
+    overflow-y: auto;
+    padding: 15px;
+    font-family: monospace;
+    border-radius: 10px;
+}
+
+/* ===============================
+   MODAL
+================================= */
+
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 999;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.4);
+    justify-content: center;
+    align-items: center;
+}
+
+.modal-content {
+    background: #ffffff;
+    padding: 30px;
+    border-radius: 15px;
+    width: 65%;
+    max-height: 75%;
+    overflow-y: auto;
+    color: #111;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+}
+
+.close-btn {
+    float: right;
+    font-size: 24px;
+    cursor: pointer;
+}
+
+.read-btn {
+    margin-left: 10px;
+    padding: 6px 12px;
+    font-size: 12px;
+    border-radius: 6px;
+    border: none;
+    background: #facc15;
+    color: #000;
+    cursor: pointer;
+    font-weight: 600;
+    transition: 0.2s ease;
+}
+
+.read-btn:hover {
+    background: #fbbf24;
+}
+
+/* Lead Score Header Layout */
+.score-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.score-sort {
+    display: flex;
+    flex-direction: column;
+    margin-left: 8px;
+}
+
+.score-sort span {
+    font-size: 10px;
+    cursor: pointer;
+    line-height: 10px;
+    transition: 0.2s;
+    color: #111;
+}
+
+.score-sort span:hover {
+    color: #facc15;  /* yellow highlight */
+    transform: scale(1.2);
+}
+
+.pagination {
+    margin-top: 20px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.pagination button {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: none;
+    background: #facc15;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.pagination button:hover {
+    background: #fbbf24;
+}
+
+.active-page {
+    background: black !important;
+    color: white;
+}
+
+/* ===============================
+   TOAST NOTIFICATION
+================================= */
+
+.toast {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    background: #111;
+    color: white;
+    padding: 14px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.4s ease;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+    z-index: 9999;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.toast.success {
+    background: #16a34a;
+}
+
+.toast.warning {
+    background: #facc15;
+    color: black;
+}
+
+a:hover {
+    text-decoration: underline;
+}   
+

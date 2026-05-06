@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Call Logs</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 9999;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.6);
+            justify-content: center;
+            align-items: center;
+        }
+        .modal.show {
+            display: flex;
+        }
+        .modal-content {
+            background: #ffffff;
+            color: #111;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 650px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        .close-btn {
+            position: absolute;
+            top: 12px; right: 18px;
+            font-size: 28px;
+            cursor: pointer;
+            color: #555;
+            line-height: 1;
+        }
+        .close-btn:hover { color: #000; }
+        #modalTitle {
+            margin-bottom: 15px;
+            font-size: 18px;
+            color: #333;
+            text-transform: capitalize;
+        }
+        #modalText {
+            white-space: pre-wrap;
+            line-height: 1.7;
+            font-size: 14px;
+            color: #222;
+        }
+        .read-btn {
+            background: #f1c40f;
+            color: #000;
+            border: none;
+            padding: 5px 14px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .read-btn:hover { background: #d4ac0d; }
+    </style>
+</head>
+<body>
+
+<div class="layout">
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <h2 class="logo">Voice Tunes India</h2>
+        <a href="/" class="nav-item">Dashboard</a>
+        <a href="/logs" class="nav-item active">Call Logs</a>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main">
+        <h1>📊 Call Logs</h1>
+
+        <div class="logs-card">
+
+            <!-- FILTER BAR -->
+            <div style="display:flex; gap:15px; margin-bottom:15px; flex-wrap:wrap;">
+                <input type="date" id="fromDate" style="padding:8px; border-radius:6px; border:none;">
+                <input type="date" id="toDate" style="padding:8px; border-radius:6px; border:none;">
+                <select id="sortOrder" style="padding:8px; border-radius:6px; border:none;">
+                    <option value="latest">Latest First</option>
+                    <option value="oldest">Oldest First</option>
+                </select>
+            </div>
+
+            <div class="table-wrapper">
+                <table id="logsTable">
+                    <thead></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="pagination" id="pagination"></div>
+
+        </div>
+    </div>
+</div>
+
+<!-- MODAL -->
+<div id="contentModal" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="closeModal()">×</span>
+        <h2 id="modalTitle"></h2>
+        <div id="modalText"></div>
+    </div>
+</div>
+
+<script>
+let allLogs = [];
+let allColumns = [];
+let dateColumn = null;
+let scoreColumn = null;
+let scoreSort = null;
+
+let currentPage = 1;
+let rowsPerPage = 10;
+let filteredLogs = [];
+
+// ✅ FIXED: openModal function
+function openModal(colName, btn) {
+    let fullText = decodeURIComponent(btn.getAttribute("data-full"));
+    document.getElementById("modalTitle").textContent = colName;
+    document.getElementById("modalText").textContent = fullText;
+    document.getElementById("contentModal").classList.add("show");
+}
+
+// ✅ FIXED: closeModal function
+function closeModal() {
+    document.getElementById("contentModal").classList.remove("show");
+    document.getElementById("modalTitle").textContent = "";
+    document.getElementById("modalText").textContent = "";
+}
+
+// Close modal when clicking outside modal-content
+document.getElementById("contentModal").addEventListener("click", function(e) {
+    if (e.target === this) closeModal();
+});
+
+// Close modal on Escape key
+document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") closeModal();
+});
+
+function loadLogs() {
+    fetch("/api/logs")
+        .then(res => res.json())
+        .then(data => {
+            if (!data.columns || data.columns.length === 0) {
+                renderEmpty();
+                return;
+            }
+            allLogs = data.logs;
+            allColumns = data.columns;
+            detectColumns();
+            applyFilters();
+        });
+}
+
+function detectColumns() {
+    dateColumn = allColumns.find(c =>
+        c.toLowerCase().includes("start") ||
+        c.toLowerCase().includes("date") ||
+        c.toLowerCase().includes("time")
+    );
+
+    scoreColumn = allColumns.find(c =>
+        c.toLowerCase() === "lead_score" ||
+        c.toLowerCase().includes("lead") ||
+        c.toLowerCase().includes("score")
+    );
+}
+
+function applyFilters() {
+    let fromDate = document.getElementById("fromDate").value;
+    let toDate = document.getElementById("toDate").value;
+    let sortOrder = document.getElementById("sortOrder").value;
+
+    filteredLogs = [...allLogs];
+
+    if (dateColumn) {
+        if (fromDate) {
+            filteredLogs = filteredLogs.filter(l =>
+                new Date(l[dateColumn]) >= new Date(fromDate)
+            );
+        }
+        if (toDate) {
+            filteredLogs = filteredLogs.filter(l =>
+                new Date(l[dateColumn]) <= new Date(toDate)
+            );
+        }
+        filteredLogs.sort((a, b) => {
+            let dA = new Date(a[dateColumn]);
+            let dB = new Date(b[dateColumn]);
+            return sortOrder === "latest" ? dB - dA : dA - dB;
+        });
+    }
+
+    if (scoreColumn && scoreSort) {
+        filteredLogs.sort((a, b) => {
+            let valA = parseFloat(a[scoreColumn]) || 0;
+            let valB = parseFloat(b[scoreColumn]) || 0;
+            return scoreSort === "asc" ? valA - valB : valB - valA;
+        });
+    }
+
+    currentPage = 1;
+    renderTable();
+    renderPagination();
+}
+
+function sortScore(order) {
+    scoreSort = order;
+    applyFilters();
+}
+
+function renderTable() {
+    const table = document.getElementById("logsTable");
+    const thead = table.querySelector("thead");
+    const tbody = table.querySelector("tbody");
+
+    thead.innerHTML = "";
+    tbody.innerHTML = "";
+
+    if (filteredLogs.length === 0) {
+        tbody.innerHTML = "<tr><td colspan='100%'>No Data Found</td></tr>";
+        return;
+    }
+
+    let headerRow = document.createElement("tr");
+
+    allColumns.forEach(col => {
+        let th = document.createElement("th");
+        if (col === scoreColumn) {
+            th.innerHTML = `
+                <div class="score-header">
+                    <span>${col}</span>
+                    <div class="score-sort">
+                        <span onclick="sortScore('asc')">▲</span>
+                        <span onclick="sortScore('desc')">▼</span>
+                    </div>
+                </div>
+            `;
+        } else {
+            th.textContent = col;
+        }
+        headerRow.appendChild(th);
+    });
+
+    let actionTh = document.createElement("th");
+    actionTh.textContent = "Action";
+    headerRow.appendChild(actionTh);
+    thead.appendChild(headerRow);
+
+    let start = (currentPage - 1) * rowsPerPage;
+    let end = start + rowsPerPage;
+    let paginatedItems = filteredLogs.slice(start, end);
+
+    paginatedItems.forEach(log => {
+        let row = document.createElement("tr");
+
+        allColumns.forEach(col => {
+            let td = document.createElement("td");
+            let value = log[col] || "";
+
+            // Duration format
+            if (col.toLowerCase().includes("duration")) {
+                let seconds = parseInt(value) || 0;
+                let minutes = Math.floor(seconds / 60);
+                let remainingSeconds = seconds % 60;
+                value = minutes + " min " + remainingSeconds + " sec";
+            }
+
+            // ✅ FIXED: Read More - using proper onclick with data attribute
+            if (col.toLowerCase().includes("conversation") ||
+                col.toLowerCase().includes("summary")) {
+
+                let shortText = value.substring(0, 60);
+                let encoded = encodeURIComponent(value);
+
+                td.innerHTML = `
+                    <span>${shortText}${value.length > 60 ? "..." : ""}</span>
+                    ${value.length > 60 ?
+                        `<button class="read-btn"
+                            data-full="${encoded}"
+                            data-col="${col}"
+                            onclick="openModal(this.dataset.col, this)">
+                            Read More
+                        </button>` : ""
+                    }
+                `;
+            } else {
+                td.textContent = value;
+            }
+
+            row.appendChild(td);
+        });
+
+        // Delete Button
+        let deleteTd = document.createElement("td");
+        deleteTd.innerHTML = `
+            <button onclick="deleteRecord('${log.session_id}')"
+                style="background:#e74c3c; color:white; border:none;
+                       padding:6px 12px; border-radius:6px; cursor:pointer;">
+                Delete
+            </button>
+        `;
+        row.appendChild(deleteTd);
+        tbody.appendChild(row);
+    });
+}
+
+function renderPagination() {
+    const pagination = document.getElementById("pagination");
+    pagination.innerHTML = "";
+
+    let totalPages = Math.ceil(filteredLogs.length / rowsPerPage);
+    if (totalPages <= 1) return;
+
+    if (currentPage > 1) {
+        pagination.innerHTML += `<button onclick="changePage(${currentPage - 1})">Previous</button>`;
+    }
+
+    for (let i = 1; i <= totalPages; i++) {
+        pagination.innerHTML += `
+            <button onclick="changePage(${i})"
+                class="${i === currentPage ? 'active-page' : ''}">
+                ${i}
+            </button>`;
+    }
+
+    if (currentPage < totalPages) {
+        pagination.innerHTML += `<button onclick="changePage(${currentPage + 1})">Next</button>`;
+    }
+}
+
+function changePage(page) {
+    currentPage = page;
+    renderTable();
+    renderPagination();
+}
+
+function deleteRecord(sessionId) {
+    if (!confirm("Are you sure you want to delete this record?")) return;
+
+    fetch(`/delete_log/${sessionId}`, { method: "DELETE" })
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === "Deleted") {
+                loadLogs();
+            } else {
+                alert("Delete failed");
+            }
+        });
+}
+
+document.getElementById("fromDate").addEventListener("input", applyFilters);
+document.getElementById("toDate").addEventListener("input", applyFilters);
+document.getElementById("sortOrder").addEventListener("change", applyFilters);
+
+loadLogs();
+</script>
+
+</body>
+</html>
