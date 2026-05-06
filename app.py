@@ -471,64 +471,166 @@ async def voice(request: Request):
 # ================= STATUS CALLBACK =================
 @app.post("/status")
 async def call_status(request: Request):
-    global current_index, call_status_ui, active_client_data, call_in_progress
 
-    form     = await request.form()
-    call_sid = form.get("CallSid") or form.get("CallUUID")
-    status   = form.get("CallStatus") or form.get("Status")
+    global current_index
+    global call_status_ui
+    global active_client_data
+    global call_in_progress
 
-    print(f"📊 Status | CallSid={call_sid} | Status={status}")
+    try:
 
-    if status not in ["completed", "busy", "failed", "no-answer"]:
-        return Response("")
-    
-    call_in_progress = False   # ✅ CALL FULLY END
+        form = await request.form()
 
-    if call_sid not in call_sessions:
-        print(f"⚠️ No session for {call_sid} — moving to next")
+        # convert immutable form to dict
+        data = dict(form)
+
+        print("\n================ STATUS CALLBACK ================")
+        print(json.dumps(data, indent=2))
+        print("=================================================\n")
+
+        call_sid = (
+            data.get("CallSid")
+            or data.get("CallUUID")
+        )
+
+        status = (
+            data.get("CallStatus")
+            or data.get("DialCallStatus")
+            or data.get("Status")
+            or ""
+        ).lower()
+
+        print(f"📊 CALL STATUS UPDATE")
+        print(f"📞 Call SID : {call_sid}")
+        print(f"📡 Status   : {status}")
+
+        # ==========================
+        # LIVE TERMINAL STATUS
+        # ==========================
+        if status == "completed":
+            print("✅ Customer call completed")
+
+        elif status == "busy":
+            print("📴 Customer number busy")
+
+        elif status == "failed":
+            print("❌ Call failed")
+
+        elif status == "no-answer":
+            print("⏳ Customer did not answer")
+
+        elif status == "answered":
+            print("🎤 Customer answered the call")
+
+        elif status == "in-progress":
+            print("☎️ Call in progress")
+
+        elif status == "ringing":
+            print("📲 Phone ringing")
+
+        else:
+            print(f"ℹ️ Unknown status: {status}")
+
+        # ==========================
+        # FINAL STATES
+        # ==========================
+        FINAL_STATES = [
+            "completed",
+            "busy",
+            "failed",
+            "no-answer"
+        ]
+
+        if status not in FINAL_STATES:
+            return Response("ok")
+
+        print("🔚 Call fully ended")
+
+        call_in_progress = False
         call_status_ui = "Completed"
+
+        # ==========================
+        # SAVE SESSION
+        # ==========================
+        if call_sid in call_sessions:
+
+            session = call_sessions[call_sid]
+
+            end_time = datetime.now()
+            start_time = session["start_time"]
+
+            duration_seconds = int(
+                (end_time - start_time).total_seconds()
+            )
+
+            conversation_text = "\n".join(
+                session["conversation"]
+            )
+
+            from ai_lead_scoring import ai_calculate_lead_score
+            from conversation_summary import generate_conversation_summary
+
+            lead_score = ai_calculate_lead_score(
+                conversation_text
+            )
+
+            summary = generate_conversation_summary(
+                conversation_text
+            )
+
+            save_call_session(
+                session_id=call_sid,
+                start_time=start_time.isoformat(),
+                end_time=end_time.isoformat(),
+                duration_seconds=duration_seconds,
+                conversation=conversation_text,
+                lead_score=lead_score,
+                summary=summary
+            )
+
+            save_call_session_json(
+                session_id=call_sid,
+                start_time=start_time.isoformat(),
+                end_time=end_time.isoformat(),
+                conversation=conversation_text,
+                chat_score=0,
+                final_lead_score=lead_score,
+                followup_required="No"
+            )
+
+            call_sessions.pop(call_sid, None)
+
+            print("💾 Session saved successfully")
+
+        else:
+            print(f"⚠️ No session found for {call_sid}")
+
+        # ==========================
+        # MOVE TO NEXT CLIENT
+        # ==========================
         if active_client_data:
             active_client_data = None
         else:
             current_index += 1
+
+        print(f"➡️ Moving to next client index: {current_index}")
+
         await asyncio.sleep(2)
+
         if not paused and not call_in_progress:
+            print("🚀 Starting next call...")
             auto_call_next()
-        return Response("")
 
-    session           = call_sessions[call_sid]
-    end_time          = datetime.now()
-    start_time        = session["start_time"]
-    duration_seconds  = int((end_time - start_time).total_seconds())
-    conversation_text = "\n".join(session["conversation"])
+        return Response("ok")
 
-    from ai_lead_scoring import ai_calculate_lead_score
-    from conversation_summary import generate_conversation_summary
-    lead_score = ai_calculate_lead_score(conversation_text)
-    summary    = generate_conversation_summary(conversation_text)
+    except Exception as e:
 
-    save_call_session(
-        session_id=call_sid, start_time=start_time.isoformat(),
-        end_time=end_time.isoformat(), duration_seconds=duration_seconds,
-        conversation=conversation_text, lead_score=lead_score, summary=summary
-    )
-    save_call_session_json(
-        session_id=call_sid, start_time=start_time.isoformat(),
-        end_time=end_time.isoformat(), conversation=conversation_text,
-        chat_score=0, final_lead_score=lead_score, followup_required="No"
-    )
-    call_sessions.pop(call_sid, None)
-    call_status_ui = "Completed"
+        print("❌ STATUS CALLBACK ERROR")
+        print(str(e))
 
-    if active_client_data:
-        active_client_data = None
-    else:
-        current_index += 1
+        traceback.print_exc()
 
-    await asyncio.sleep(1)
-    if not paused and not call_in_progress:
-        auto_call_next()
-    return Response("")
+        return Response("error")
 
 
 # ================= CALL LOGIC =================
