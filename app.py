@@ -613,7 +613,10 @@ async def transfer_fallback(request: Request):
 # ================= DASHBOARD =================
 @app.get("/")
 async def dashboard(request: Request):
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    return templates.TemplateResponse(
+    "dashboard.html",
+    {"request": request}
+)
 
 
 @app.get("/call_status_ui")
