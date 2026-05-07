@@ -4,14 +4,12 @@ import csv
 import io
 import base64
 import json
-import sys
 import traceback
 import urllib.parse
 import requests
 from datetime import datetime
 
 from dotenv import load_dotenv
-import websocket
 load_dotenv()
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -46,7 +44,7 @@ app.add_middleware(
 # ================= CONFIG =================
 SARVAM_API_KEY   = os.getenv("SARVAM_API_KEY")
 SARVAM_TTS_URL   = "https://api.sarvam.ai/text-to-speech"
-BASE_URL         = os.getenv("BASE_URL", "https://voice-calling-agent-1f3f.onrender.com")
+BASE_URL         = os.getenv("BASE_URL", "https://voice-calling-agent-1f3f.onrender.com/")
 EXOTEL_SID       = os.getenv("EXOTEL_SID")
 EXOTEL_API_KEY   = os.getenv("EXOTEL_API_KEY")
 EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN")
@@ -103,7 +101,6 @@ def terminal_print(*args, **kwargs):
 # override global print
 builtins.print = terminal_print
 
-
 # ================= LOAD CLIENTS =================
 def load_clients():
     global clients
@@ -151,12 +148,11 @@ def build_pitch_text(client: dict) -> str:
 
     name = str(name).strip()
 
-    print(f"🔥 FINAL NAME USED: {name}")
+    print("🔥 FINAL NAME USED:", name)
 
     return normalize_text(
-        f"हाय {name}, "
-        "वॉइस ट्यून्स इंडिया से बोल रही हूँ। "
-        "सिर्फ तीन हजार दो सौ पचास रुपये में यूजीसी वीडियो मिल रहा है। "
+        f"हाय {name}, वॉइस ट्यून्स इंडिया से बोल रही हूँ। "
+        "सिर्फ 3,250 में यूजीसी वीडियो मिल रहा है। "
         "मैं आपको हमारे एग्जीक्यूटिव से कनेक्ट कर रही हूँ।"
     )
 
@@ -233,7 +229,7 @@ async def preload_all_static_audio():
             f.write(pcm_8k)
         # Load into memory
         audio_cache[client_key] = pcm_8k
-        print(f"✅ Generated & saved: {client_key}")
+        print(f"  ✅ Generated & saved: {client_key} ({len(pcm_8k)} bytes)")
 
     results = await asyncio.gather(
         *[_generate_one(k, p, t) for k, p, t in tasks],
@@ -347,7 +343,7 @@ async def voicebot_ws(websocket: WebSocket):
         await websocket.close()
         return
 
-    print("✅ Pitch audio ready")
+    print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes (loaded from cache)")
 
     async def send_chunk(chunk: bytes):
         nonlocal stream_sid
@@ -391,7 +387,7 @@ async def voicebot_ws(websocket: WebSocket):
                 if not stream_sid:
                     stream_sid = msg.get("stream_sid") or msg.get("streamSid")
 
-                print("⚡ First media received — streaming cached pitch instantly")
+                print(f"⚡ First media received — streaming cached pitch instantly")
 
                 frame_index = 0
                 start_time = asyncio.get_event_loop().time()
@@ -415,27 +411,13 @@ async def voicebot_ws(websocket: WebSocket):
                 print("⏳ Waiting before clean transfer...")
 
                 # IMPORTANT: give Exotel time to process last packets
-                # IMPORTANT
-                # audio પૂરું play થાય પછી થોડું wait
-                await asyncio.sleep(2.5)
-
-                # 2 silent frames
-                for _ in range(2):
-                    await send_chunk(b'\x00' * CHUNK_BYTES)
-                    await asyncio.sleep(0.02)
-
-                print("✅ Audio playback completed")
-
-                # transfer trigger
-                transfer_pending[call_sid] = True
-
-                # Exotel ને time આપ
                 await asyncio.sleep(1)
 
-                # clean close
-                await websocket.close(code=1000)
+                # send a silent chunk (stabilizes stream)
+                await send_chunk(b'\x00' * CHUNK_BYTES)
 
-                print("🔁 Websocket closed after playback")
+                # NOW close cleanly
+                await websocket.close()
 
                 print("🔁 WebSocket closed properly for transfer")
 
@@ -469,11 +451,11 @@ async def voice(request: Request):
         or request.query_params.get("CallUUID")
     )
 
-    print(f"📞 /voice | CallSid={call_sid}")
+    print(f"📞 /voice | CallSid={call_sid} | transfer_pending={call_sid in transfer_pending}")
 
     if call_sid and call_sid in transfer_pending:
         transfer_pending.pop(call_sid, None)
-        print("🔁 Transfer to human")
+        print(f"🔁 Transfer to human: {HUMAN_AGENT_NUMBER}")
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Dial action="/transfer_fallback" method="POST" timeout="30">{HUMAN_AGENT_NUMBER}</Dial>
@@ -498,34 +480,15 @@ async def call_status(request: Request):
     call_sid = form.get("CallSid") or form.get("CallUUID")
     status   = form.get("CallStatus") or form.get("Status")
 
-    print(f"📊 Status | {status}")
+    print(f"📊 Status | CallSid={call_sid} | Status={status}")
 
-    status = (status or "").lower()
-
-    print(f"📊 CALL STATUS => {status}")
-
-    if status == "ringing":
-        call_status_ui = "Ringing"
-
-    elif status == "answered":
-        call_status_ui = "Answered"
-
-    elif status == "busy":
-        call_status_ui = "Busy"
-
-    elif status == "failed":
-        call_status_ui = "Failed"
-
-    elif status == "no-answer":
-        call_status_ui = "No Answer"
-
-    elif status == "completed":
-        call_status_ui = "Completed"
+    if status not in ["completed", "busy", "failed", "no-answer"]:
+        return Response("")
     
     call_in_progress = False   # ✅ CALL FULLY END
 
     if call_sid not in call_sessions:
-        print("➡️ Moving to next client")
+        print(f"⚠️ No session for {call_sid} — moving to next")
         call_status_ui = "Completed"
         if active_client_data:
             active_client_data = None
@@ -591,10 +554,10 @@ def make_call(to_number, client=None):
         "StatusCallback": BASE_URL + "/status"
     }
 
-    print(f"📲 Calling: {to_number}")
+    print("📲 Calling:", to_number)
 
     response = requests.post(url, data=payload, auth=(EXOTEL_API_KEY, EXOTEL_API_TOKEN))
-    print("✅ Exotel call initiated")
+    print("Exotel response:", response.text)
 
     try:
         current_call_sid = response.json()["Call"]["Sid"]
@@ -622,7 +585,7 @@ def auto_call_next():
 async def transfer_fallback(request: Request):
     form        = await request.form()
     dial_status = form.get("DialCallStatus")
-    print(f"📞 Transfer fallback | {dial_status}")
+    print(f"📞 Transfer fallback | DialCallStatus={dial_status}")
 
     FALLBACK_NUMBER = "+919173793068"
 
@@ -648,12 +611,9 @@ async def transfer_fallback(request: Request):
 
 
 # ================= DASHBOARD =================
-@app.api_route("/", methods=["GET", "HEAD"])
+@app.get("/")
 async def dashboard(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="dashboard.html"
-    )
+    return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
 @app.get("/call_status_ui")
@@ -692,10 +652,7 @@ async def get_clients():
 
 @app.get("/logs")
 async def logs_page(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="logs.html"
-    )
+    return templates.TemplateResponse("logs.html", {"request": request})
 
 
 @app.get("/api/logs")
@@ -875,6 +832,7 @@ async def delete_all_clients():
         return JSONResponse({
             "status": str(e)
         })
+
 
 # ================= STARTUP =================
 @app.on_event("startup")
