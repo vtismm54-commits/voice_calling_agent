@@ -28,6 +28,7 @@ from session_logger_json import save_call_session_json
 from conversation_state import clear_history
 from fastapi import UploadFile, File
 import shutil
+import builtins
 
 # ================= APP SETUP =================
 http_client = httpx.AsyncClient(timeout=30)
@@ -78,19 +79,30 @@ audio_cache: dict[str, bytes] = {}
 call_in_progress = False
 terminal_logs = []
 
-def add_terminal_log(message):
+# ================= FULL TERMINAL CAPTURE =================
 
+original_print = builtins.print
+
+def terminal_print(*args, **kwargs):
     try:
+        message = " ".join(str(a) for a in args)
 
-        print(message, file=sys.__stdout__)
+        # console માં print
+        original_print(*args, **kwargs)
 
-        terminal_logs.append(str(message))
+        # dashboard logs માં save
+        terminal_logs.append(message)
 
-        if len(terminal_logs) > 300:
+        # limit
+        if len(terminal_logs) > 1000:
             terminal_logs.pop(0)
 
-    except:
-        pass
+    except Exception as e:
+        original_print("LOGGER ERROR:", e)
+
+# override global print
+builtins.print = terminal_print
+
 
 # ================= LOAD CLIENTS =================
 def load_clients():
@@ -139,7 +151,7 @@ def build_pitch_text(client: dict) -> str:
 
     name = str(name).strip()
 
-    add_terminal_log(f"🔥 FINAL NAME USED: {name}")
+    print(f"🔥 FINAL NAME USED: {name}")
 
     return normalize_text(
         f"हाय {name}, "
@@ -187,7 +199,7 @@ async def preload_all_static_audio():
     Pre-generate and save audio for every client to disk + memory at startup.
     No TTS will be called during live calls.
     """
-    add_terminal_log("⚡ Pre-generating client pitch audio...")
+    print("⚡ Pre-generating client pitch audio...")
     load_clients()
 
     tasks = []
@@ -221,7 +233,7 @@ async def preload_all_static_audio():
             f.write(pcm_8k)
         # Load into memory
         audio_cache[client_key] = pcm_8k
-        add_terminal_log(f"✅ Generated & saved: {client_key}")
+        print(f"✅ Generated & saved: {client_key}")
 
     results = await asyncio.gather(
         *[_generate_one(k, p, t) for k, p, t in tasks],
@@ -230,7 +242,7 @@ async def preload_all_static_audio():
 
     ok = len([r for r in results if not isinstance(r, Exception)])
     total = len(clients)
-    add_terminal_log(f"✅ Audio cache ready: {len(audio_cache)}/{total} clients")
+    print(f"✅ Audio cache ready: {len(audio_cache)}/{total} clients")
 
 
 def get_cached_audio(client: dict) -> bytes:
@@ -335,7 +347,7 @@ async def voicebot_ws(websocket: WebSocket):
         await websocket.close()
         return
 
-    add_terminal_log("✅ Pitch audio ready")
+    print("✅ Pitch audio ready")
 
     async def send_chunk(chunk: bytes):
         nonlocal stream_sid
@@ -371,7 +383,7 @@ async def voicebot_ws(websocket: WebSocket):
                 stream_sid = msg.get("stream_sid") or msg.get("streamSid")
 
             if event in ("stop", "disconnect"):
-                add_terminal_log(f"📴 Call ended: {event}")
+                print(f"📴 Call ended: {event}")
                 break
 
             if event == "media":
@@ -379,7 +391,7 @@ async def voicebot_ws(websocket: WebSocket):
                 if not stream_sid:
                     stream_sid = msg.get("stream_sid") or msg.get("streamSid")
 
-                add_terminal_log("⚡ First media received — streaming cached pitch instantly")
+                print("⚡ First media received — streaming cached pitch instantly")
 
                 frame_index = 0
                 start_time = asyncio.get_event_loop().time()
@@ -397,7 +409,7 @@ async def voicebot_ws(websocket: WebSocket):
                     if delay > 0:
                         await asyncio.sleep(delay)
 
-                add_terminal_log("✅ Pitch delivered — triggering transfer")
+                print("✅ Pitch delivered — triggering transfer")
                 transfer_pending[call_sid] = True
 
                 print("⏳ Waiting before clean transfer...")
@@ -412,7 +424,7 @@ async def voicebot_ws(websocket: WebSocket):
                     await send_chunk(b'\x00' * CHUNK_BYTES)
                     await asyncio.sleep(0.02)
 
-                add_terminal_log("✅ Audio playback completed")
+                print("✅ Audio playback completed")
 
                 # transfer trigger
                 transfer_pending[call_sid] = True
@@ -423,16 +435,16 @@ async def voicebot_ws(websocket: WebSocket):
                 # clean close
                 await websocket.close(code=1000)
 
-                add_terminal_log("🔁 Websocket closed after playback")
+                print("🔁 Websocket closed after playback")
 
-                add_terminal_log("🔁 WebSocket closed properly for transfer")
+                print("🔁 WebSocket closed properly for transfer")
 
                 return
 
     except WebSocketDisconnect:
         print(f"📴 WebSocket disconnected: {call_sid}")
     except Exception as e:
-        add_terminal_log(f"⚠️ WebSocket error: {e}")
+        print(f"⚠️ WebSocket error: {e}")
         traceback.print_exc()
     finally:
         await finalize_call_session(call_sid, session_conversation)
@@ -457,11 +469,11 @@ async def voice(request: Request):
         or request.query_params.get("CallUUID")
     )
 
-    add_terminal_log(f"📞 /voice | CallSid={call_sid}")
+    print(f"📞 /voice | CallSid={call_sid}")
 
     if call_sid and call_sid in transfer_pending:
         transfer_pending.pop(call_sid, None)
-        add_terminal_log("🔁 Transfer to human")
+        print("🔁 Transfer to human")
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Dial action="/transfer_fallback" method="POST" timeout="30">{HUMAN_AGENT_NUMBER}</Dial>
@@ -486,11 +498,11 @@ async def call_status(request: Request):
     call_sid = form.get("CallSid") or form.get("CallUUID")
     status   = form.get("CallStatus") or form.get("Status")
 
-    add_terminal_log(f"📊 Status | {status}")
+    print(f"📊 Status | {status}")
 
     status = (status or "").lower()
 
-    add_terminal_log(f"📊 CALL STATUS => {status}")
+    print(f"📊 CALL STATUS => {status}")
 
     if status == "ringing":
         call_status_ui = "Ringing"
@@ -513,7 +525,7 @@ async def call_status(request: Request):
     call_in_progress = False   # ✅ CALL FULLY END
 
     if call_sid not in call_sessions:
-        add_terminal_log("➡️ Moving to next client")
+        print("➡️ Moving to next client")
         call_status_ui = "Completed"
         if active_client_data:
             active_client_data = None
@@ -579,10 +591,10 @@ def make_call(to_number, client=None):
         "StatusCallback": BASE_URL + "/status"
     }
 
-    add_terminal_log(f"📲 Calling: {to_number}")
+    print(f"📲 Calling: {to_number}")
 
     response = requests.post(url, data=payload, auth=(EXOTEL_API_KEY, EXOTEL_API_TOKEN))
-    add_terminal_log("✅ Exotel call initiated")
+    print("✅ Exotel call initiated")
 
     try:
         current_call_sid = response.json()["Call"]["Sid"]
@@ -610,7 +622,7 @@ def auto_call_next():
 async def transfer_fallback(request: Request):
     form        = await request.form()
     dial_status = form.get("DialCallStatus")
-    add_terminal_log(f"📞 Transfer fallback | {dial_status}")
+    print(f"📞 Transfer fallback | {dial_status}")
 
     FALLBACK_NUMBER = "+919173793068"
 

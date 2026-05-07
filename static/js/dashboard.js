@@ -313,6 +313,8 @@ async function deleteAllClients() {
     }
 }
 
+let lastLogs = "";
+
 async function loadTerminalLogs() {
 
     try {
@@ -322,16 +324,31 @@ async function loadTerminalLogs() {
 
         const terminal = document.getElementById("liveTerminal");
 
-        terminal.innerHTML = data.logs.join("\n");
+        const newLogs = data.logs.join("\n");
 
-        // auto scroll
-        terminal.scrollTop = terminal.scrollHeight;
+        // update only if changed
+        if (newLogs !== lastLogs) {
+
+            lastLogs = newLogs;
+
+            // safer than innerHTML
+            terminal.textContent = newLogs;
+
+            // auto scroll bottom
+            terminal.scrollTop = terminal.scrollHeight;
+        }
 
     } catch(err) {
-        console.error(err);
+
+        console.error("Terminal Error:", err);
+
     }
 }
 
+// first load instantly
+loadTerminalLogs();
+
+// refresh every 1 sec
 setInterval(loadTerminalLogs, 1000);
 
 function closeLeadModal() {
