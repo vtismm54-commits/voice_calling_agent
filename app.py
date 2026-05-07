@@ -453,12 +453,14 @@ async def voice(request: Request):
 </Response>"""
         return Response(content=xml, media_type="application/xml")
 
-    xml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Connect>
-        <Voicebot />
-    </Connect>
-</Response>"""
+    ws_url = BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <Response>
+        <Connect>
+            <Stream url="{ws_url}/voicebot?call_sid={call_sid}" />
+        </Connect>
+    </Response>"""
     return Response(content=xml, media_type="application/xml")
 
 
