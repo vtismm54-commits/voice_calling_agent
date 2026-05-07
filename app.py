@@ -77,26 +77,19 @@ audio_cache: dict[str, bytes] = {}
 call_in_progress = False
 terminal_logs = []
 
-class TerminalCapture:
+def add_terminal_log(message):
 
-    def write(self, message):
+    try:
 
-        message = str(message).strip()
+        print(message, file=sys.__stdout__)
 
-        if message:
-            terminal_logs.append(message)
+        terminal_logs.append(str(message))
 
-        # keep last 300 logs
         if len(terminal_logs) > 300:
             terminal_logs.pop(0)
 
-        sys.__stdout__.write(message + "\n")
-
-    def flush(self):
+    except:
         pass
-
-sys.stdout = TerminalCapture()
-sys.stderr = TerminalCapture()    
 
 # ================= LOAD CLIENTS =================
 def load_clients():
@@ -145,7 +138,7 @@ def build_pitch_text(client: dict) -> str:
 
     name = str(name).strip()
 
-    print("🔥 FINAL NAME USED:", name)
+    add_terminal_log(f"🔥 FINAL NAME USED: {name}")
 
     return normalize_text(
         f"हाय {name}, वॉइस ट्यून्स इंडिया से बोल रही हूँ। "
@@ -192,7 +185,7 @@ async def preload_all_static_audio():
     Pre-generate and save audio for every client to disk + memory at startup.
     No TTS will be called during live calls.
     """
-    print("⚡ Pre-generating client pitch audio...")
+    add_terminal_log("⚡ Pre-generating client pitch audio...")
     load_clients()
 
     tasks = []
@@ -226,7 +219,7 @@ async def preload_all_static_audio():
             f.write(pcm_8k)
         # Load into memory
         audio_cache[client_key] = pcm_8k
-        print(f"  ✅ Generated & saved: {client_key} ({len(pcm_8k)} bytes)")
+        add_terminal_log(f"✅ Generated & saved: {client_key}")
 
     results = await asyncio.gather(
         *[_generate_one(k, p, t) for k, p, t in tasks],
@@ -235,7 +228,7 @@ async def preload_all_static_audio():
 
     ok = len([r for r in results if not isinstance(r, Exception)])
     total = len(clients)
-    print(f"✅ Audio cache ready: {len(audio_cache)}/{total} clients")
+    add_terminal_log(f"✅ Audio cache ready: {len(audio_cache)}/{total} clients")
 
 
 def get_cached_audio(client: dict) -> bytes:
@@ -340,7 +333,7 @@ async def voicebot_ws(websocket: WebSocket):
         await websocket.close()
         return
 
-    print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes (loaded from cache)")
+    add_terminal_log("✅ Pitch audio ready")
 
     async def send_chunk(chunk: bytes):
         nonlocal stream_sid
@@ -376,7 +369,7 @@ async def voicebot_ws(websocket: WebSocket):
                 stream_sid = msg.get("stream_sid") or msg.get("streamSid")
 
             if event in ("stop", "disconnect"):
-                print(f"📴 Call ended: {event}")
+                add_terminal_log(f"📴 Call ended: {event}")
                 break
 
             if event == "media":
@@ -384,7 +377,7 @@ async def voicebot_ws(websocket: WebSocket):
                 if not stream_sid:
                     stream_sid = msg.get("stream_sid") or msg.get("streamSid")
 
-                print(f"⚡ First media received — streaming cached pitch instantly")
+                add_terminal_log("⚡ First media received — streaming cached pitch instantly")
 
                 frame_index = 0
                 start_time = asyncio.get_event_loop().time()
@@ -402,28 +395,29 @@ async def voicebot_ws(websocket: WebSocket):
                     if delay > 0:
                         await asyncio.sleep(delay)
 
-                print("✅ Pitch delivered — triggering transfer")
+                add_terminal_log("✅ Pitch delivered")
+
+                # IMPORTANT
+                # wait so customer fully hears pitch
+                await asyncio.sleep(3)
+
+                # send few silent chunks
+                for _ in range(8):
+                    await send_chunk(b'\x00' * CHUNK_BYTES)
+                    await asyncio.sleep(0.02)
+
+                add_terminal_log("🔁 Triggering transfer now")
+
                 transfer_pending[call_sid] = True
 
-                print("⏳ Waiting before clean transfer...")
-
-                # IMPORTANT: give Exotel time to process last packets
-                await asyncio.sleep(1)
-
-                # send a silent chunk (stabilizes stream)
-                await send_chunk(b'\x00' * CHUNK_BYTES)
-
-                # NOW close cleanly
-                await websocket.close()
-
-                print("🔁 WebSocket closed properly for transfer")
-
+                # IMPORTANT
+                # do NOT close websocket immediately
                 return
 
     except WebSocketDisconnect:
         print(f"📴 WebSocket disconnected: {call_sid}")
     except Exception as e:
-        print(f"⚠️ WebSocket error: {e}")
+        add_terminal_log(f"⚠️ WebSocket error: {e}")
         traceback.print_exc()
     finally:
         await finalize_call_session(call_sid, session_conversation)
@@ -448,11 +442,11 @@ async def voice(request: Request):
         or request.query_params.get("CallUUID")
     )
 
-    print(f"📞 /voice | CallSid={call_sid} | transfer_pending={call_sid in transfer_pending}")
+    add_terminal_log(f"📞 /voice | CallSid={call_sid}")
 
     if call_sid and call_sid in transfer_pending:
         transfer_pending.pop(call_sid, None)
-        print(f"🔁 Transfer to human: {HUMAN_AGENT_NUMBER}")
+        add_terminal_log("🔁 Transfer to human")
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Dial action="/transfer_fallback" method="POST" timeout="30">{HUMAN_AGENT_NUMBER}</Dial>
@@ -471,175 +465,64 @@ async def voice(request: Request):
 # ================= STATUS CALLBACK =================
 @app.post("/status")
 async def call_status(request: Request):
+    global current_index, call_status_ui, active_client_data, call_in_progress
 
-    global current_index
-    global call_status_ui
-    global active_client_data
-    global call_in_progress
+    form     = await request.form()
+    call_sid = form.get("CallSid") or form.get("CallUUID")
+    status   = form.get("CallStatus") or form.get("Status")
 
-    try:
+    add_terminal_log(f"📊 Status | {status}")
 
-        form = await request.form()
+    if status not in ["completed", "busy", "failed", "no-answer"]:
+        return Response("")
+    
+    call_in_progress = False   # ✅ CALL FULLY END
 
-        # convert immutable form to dict
-        data = dict(form)
-
-        print("\n================ STATUS CALLBACK ================")
-        print(json.dumps(data, indent=2))
-        print("=================================================\n")
-
-        call_sid = (
-            data.get("CallSid")
-            or data.get("CallUUID")
-        )
-
-        status = (
-            data.get("CallStatus")
-            or data.get("DialCallStatus")
-            or data.get("Status")
-            or ""
-        ).lower()
-
-        print(f"📊 CALL STATUS UPDATE")
-        print(f"📞 Call SID : {call_sid}")
-        print(f"📡 Status   : {status}")
-
-        # ==========================
-        # LIVE TERMINAL STATUS
-        # ==========================
-        if status == "completed":
-            print("✅ Customer call completed")
-
-        elif status == "busy":
-            print("📴 Customer number busy")
-
-        elif status == "failed":
-            print("❌ Call failed")
-
-        elif status == "no-answer":
-            print("⏳ Customer did not answer")
-
-        elif status == "answered":
-            print("🎤 Customer answered the call")
-
-        elif status == "in-progress":
-            print("☎️ Call in progress")
-
-        elif status == "ringing":
-            print("📲 Phone ringing")
-
-        else:
-            print(f"ℹ️ Unknown status: {status}")
-
-        # ==========================
-        # FINAL STATES
-        # ==========================
-        FINAL_STATES = [
-            "completed",
-            "busy",
-            "failed",
-            "no-answer"
-        ]
-        # LIVE STATUS UI
-        if status == "ringing":
-            call_status_ui = "Ringing"
-
-        elif status == "answered":
-            call_status_ui = "Answered"
-
-        elif status == "in-progress":
-            call_status_ui = "In Progress"
-
-        if status not in FINAL_STATES:
-            return Response("ok")
-
-        print("🔚 Call fully ended")
-
-        call_in_progress = False
+    if call_sid not in call_sessions:
+        add_terminal_log("➡️ Moving to next client")
         call_status_ui = "Completed"
-
-        # ==========================
-        # SAVE SESSION
-        # ==========================
-        if call_sid in call_sessions:
-
-            session = call_sessions[call_sid]
-
-            end_time = datetime.now()
-            start_time = session["start_time"]
-
-            duration_seconds = int(
-                (end_time - start_time).total_seconds()
-            )
-
-            conversation_text = "\n".join(
-                session["conversation"]
-            )
-
-            from ai_lead_scoring import ai_calculate_lead_score
-            from conversation_summary import generate_conversation_summary
-
-            lead_score = ai_calculate_lead_score(
-                conversation_text
-            )
-
-            summary = generate_conversation_summary(
-                conversation_text
-            )
-
-            save_call_session(
-                session_id=call_sid,
-                start_time=start_time.isoformat(),
-                end_time=end_time.isoformat(),
-                duration_seconds=duration_seconds,
-                conversation=conversation_text,
-                lead_score=lead_score,
-                summary=summary
-            )
-
-            save_call_session_json(
-                session_id=call_sid,
-                start_time=start_time.isoformat(),
-                end_time=end_time.isoformat(),
-                conversation=conversation_text,
-                chat_score=0,
-                final_lead_score=lead_score,
-                followup_required="No"
-            )
-
-            call_sessions.pop(call_sid, None)
-
-            print("💾 Session saved successfully")
-
-        else:
-            print(f"⚠️ No session found for {call_sid}")
-
-        # ==========================
-        # MOVE TO NEXT CLIENT
-        # ==========================
         if active_client_data:
             active_client_data = None
         else:
             current_index += 1
-
-        print(f"➡️ Moving to next client index: {current_index}")
-
         await asyncio.sleep(2)
-
         if not paused and not call_in_progress:
-            print("🚀 Starting next call...")
             auto_call_next()
+        return Response("")
 
-        return Response("ok")
+    session           = call_sessions[call_sid]
+    end_time          = datetime.now()
+    start_time        = session["start_time"]
+    duration_seconds  = int((end_time - start_time).total_seconds())
+    conversation_text = "\n".join(session["conversation"])
 
-    except Exception as e:
+    from ai_lead_scoring import ai_calculate_lead_score
+    from conversation_summary import generate_conversation_summary
+    lead_score = ai_calculate_lead_score(conversation_text)
+    summary    = generate_conversation_summary(conversation_text)
 
-        print("❌ STATUS CALLBACK ERROR")
-        print(str(e))
+    save_call_session(
+        session_id=call_sid, start_time=start_time.isoformat(),
+        end_time=end_time.isoformat(), duration_seconds=duration_seconds,
+        conversation=conversation_text, lead_score=lead_score, summary=summary
+    )
+    save_call_session_json(
+        session_id=call_sid, start_time=start_time.isoformat(),
+        end_time=end_time.isoformat(), conversation=conversation_text,
+        chat_score=0, final_lead_score=lead_score, followup_required="No"
+    )
+    call_sessions.pop(call_sid, None)
+    call_status_ui = "Completed"
 
-        traceback.print_exc()
+    if active_client_data:
+        active_client_data = None
+    else:
+        current_index += 1
 
-        return Response("error")
+    await asyncio.sleep(1)
+    if not paused and not call_in_progress:
+        auto_call_next()
+    return Response("")
 
 
 # ================= CALL LOGIC =================
@@ -662,10 +545,10 @@ def make_call(to_number, client=None):
         "StatusCallback": BASE_URL + "/status"
     }
 
-    print("📲 Calling:", to_number)
+    add_terminal_log(f"📲 Calling: {to_number}")
 
     response = requests.post(url, data=payload, auth=(EXOTEL_API_KEY, EXOTEL_API_TOKEN))
-    print("Exotel response:", response.text)
+    add_terminal_log("✅ Exotel call initiated")
 
     try:
         current_call_sid = response.json()["Call"]["Sid"]
@@ -693,7 +576,7 @@ def auto_call_next():
 async def transfer_fallback(request: Request):
     form        = await request.form()
     dial_status = form.get("DialCallStatus")
-    print(f"📞 Transfer fallback | DialCallStatus={dial_status}")
+    add_terminal_log(f"📞 Transfer fallback | {dial_status}")
 
     FALLBACK_NUMBER = "+919173793068"
 
