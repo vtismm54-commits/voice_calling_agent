@@ -11,6 +11,7 @@ import requests
 from datetime import datetime
 
 from dotenv import load_dotenv
+import websocket
 load_dotenv()
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -141,8 +142,9 @@ def build_pitch_text(client: dict) -> str:
     add_terminal_log(f"🔥 FINAL NAME USED: {name}")
 
     return normalize_text(
-        f"हाय {name}, वॉइस ट्यून्स इंडिया से बोल रही हूँ। "
-        "सिर्फ 3,250 में यूजीसी वीडियो मिल रहा है। "
+        f"हाय {name}, "
+        "वॉइस ट्यून्स इंडिया से बोल रही हूँ। "
+        "सिर्फ तीन हजार दो सौ पचास रुपये में यूजीसी वीडियो मिल रहा है। "
         "मैं आपको हमारे एग्जीक्यूटिव से कनेक्ट कर रही हूँ।"
     )
 
@@ -395,23 +397,36 @@ async def voicebot_ws(websocket: WebSocket):
                     if delay > 0:
                         await asyncio.sleep(delay)
 
-                add_terminal_log("✅ Pitch delivered")
+                add_terminal_log("✅ Pitch delivered — triggering transfer")
+                transfer_pending[call_sid] = True
 
+                print("⏳ Waiting before clean transfer...")
+
+                # IMPORTANT: give Exotel time to process last packets
                 # IMPORTANT
-                # wait so customer fully hears pitch
-                await asyncio.sleep(3)
+                # audio પૂરું play થાય પછી થોડું wait
+                await asyncio.sleep(2.5)
 
-                # send few silent chunks
-                for _ in range(8):
+                # 2 silent frames
+                for _ in range(2):
                     await send_chunk(b'\x00' * CHUNK_BYTES)
                     await asyncio.sleep(0.02)
 
-                add_terminal_log("🔁 Triggering transfer now")
+                add_terminal_log("✅ Audio playback completed")
 
+                # transfer trigger
                 transfer_pending[call_sid] = True
 
-                # IMPORTANT
-                # do NOT close websocket immediately
+                # Exotel ને time આપ
+                await asyncio.sleep(1)
+
+                # clean close
+                await websocket.close(code=1000)
+
+                add_terminal_log("🔁 Websocket closed after playback")
+
+                add_terminal_log("🔁 WebSocket closed properly for transfer")
+
                 return
 
     except WebSocketDisconnect:
@@ -453,14 +468,12 @@ async def voice(request: Request):
 </Response>"""
         return Response(content=xml, media_type="application/xml")
 
-    ws_url = BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
-
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-    <Response>
-        <Connect>
-            <Stream url="{ws_url}/voicebot?call_sid={call_sid}" />
-        </Connect>
-    </Response>"""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Voicebot />
+    </Connect>
+</Response>"""
     return Response(content=xml, media_type="application/xml")
 
 
@@ -475,8 +488,27 @@ async def call_status(request: Request):
 
     add_terminal_log(f"📊 Status | {status}")
 
-    if status not in ["completed", "busy", "failed", "no-answer"]:
-        return Response("")
+    status = (status or "").lower()
+
+    add_terminal_log(f"📊 CALL STATUS => {status}")
+
+    if status == "ringing":
+        call_status_ui = "Ringing"
+
+    elif status == "answered":
+        call_status_ui = "Answered"
+
+    elif status == "busy":
+        call_status_ui = "Busy"
+
+    elif status == "failed":
+        call_status_ui = "Failed"
+
+    elif status == "no-answer":
+        call_status_ui = "No Answer"
+
+    elif status == "completed":
+        call_status_ui = "Completed"
     
     call_in_progress = False   # ✅ CALL FULLY END
 
