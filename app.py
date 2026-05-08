@@ -461,11 +461,13 @@ async def voice(request: Request):
     <Dial action="/transfer_fallback" method="POST" timeout="30">{HUMAN_AGENT_NUMBER}</Dial>
 </Response>"""
         return Response(content=xml, media_type="application/xml")
+    
+    stream_call_sid = call_sid or "unknown"
 
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="wss://voice-calling-agent-1f3f.onrender.com/voicebot?call_sid={call_sid}" />
+        <Stream url="wss://voice-calling-agent-1f3f.onrender.com/voicebot?call_sid={stream_call_sid}" />
     </Connect>
 </Response>"""
     return Response(content=xml, media_type="application/xml")
