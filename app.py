@@ -462,10 +462,10 @@ async def voice(request: Request):
 </Response>"""
         return Response(content=xml, media_type="application/xml")
 
-    xml = """<?xml version="1.0" encoding="UTF-8"?>
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Voicebot />
+        <Stream url="wss://voice-calling-agent-1f3f.onrender.com/voicebot?call_sid={call_sid}" />
     </Connect>
 </Response>"""
     return Response(content=xml, media_type="application/xml")
@@ -547,10 +547,10 @@ def make_call(to_number, client=None):
 
     url     = f"https://api.exotel.com/v1/Accounts/{EXOTEL_SID}/Calls/connect.json"
     payload = {
-        "From": to_number,
-        "CallerId": EXOTEL_NUMBER,
-        "Url": BASE_URL + "/voice",
-        "TimeOut": 30,
+        "From"          : to_number,
+        "CallerId"      : EXOTEL_NUMBER,
+        "Url"           : "http://my.exotel.com/voicetunesindia1/exoml/start_voice/1199576",
+        "TimeOut"       : 30,
         "StatusCallback": BASE_URL + "/status"
     }
 
