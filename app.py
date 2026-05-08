@@ -355,13 +355,7 @@ async def voicebot_ws(websocket: WebSocket):
         if remainder:
             chunk += b'\x00' * (CHUNK_BYTES - remainder)
 
-        await websocket.send_text(json.dumps({
-            "event": "media",
-            "stream_sid": stream_sid,
-            "media": {
-                "payload": base64.b64encode(chunk).decode()
-            }
-        }))
+        await websocket.send_bytes(chunk)
 
     try:
         while True:
