@@ -206,7 +206,7 @@ async def preload_all_static_audio():
         pitch_text  = build_pitch_text(client)
 
         # Load from disk if already cached
-        if False and os.path.exists(cache_path):
+        if os.path.exists(cache_path):
             with open(cache_path, "rb") as f:
                 pcm_8k = f.read()
             if pcm_8k:
@@ -218,6 +218,10 @@ async def preload_all_static_audio():
 
     async def _generate_one(client_key, cache_path, pitch_text):
         audio_16k = await generate_sarvam_audio_bytes(pitch_text)
+        print("🎤 Generating audio for:", client_key) 
+        print("📝 Text:", pitch_text) 
+        print("🎧 Audio bytes:", len(audio_16k) if audio_16k else 0)
+        print("📁 Saving WAV:", cache_path)
         if not audio_16k:
             print(f"  ❌ TTS failed for {client_key}")
             return
@@ -226,6 +230,7 @@ async def preload_all_static_audio():
             print(f"  ❌ Resample failed for {client_key}")
             return
         # Save to disk
+        os.makedirs( os.path.dirname(cache_path), exist_ok=True )
         with wave.open(cache_path, "wb") as wav_file: 
             wav_file.setnchannels(1) 
             wav_file.setsampwidth(2) 
