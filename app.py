@@ -4,6 +4,7 @@ import csv
 import io
 import base64
 import json
+import sys
 import traceback
 import urllib.parse
 import requests
@@ -26,11 +27,7 @@ from session_logger_json import save_call_session_json
 from conversation_state import clear_history
 from fastapi import UploadFile, File
 import shutil
-import builtins
-import wave
 
-call_client_map = {}
-current_client = None
 # ================= APP SETUP =================
 http_client = httpx.AsyncClient(timeout=30)
 app = FastAPI()
@@ -47,7 +44,7 @@ app.add_middleware(
 # ================= CONFIG =================
 SARVAM_API_KEY   = os.getenv("SARVAM_API_KEY")
 SARVAM_TTS_URL   = "https://api.sarvam.ai/text-to-speech"
-BASE_URL         = os.getenv("BASE_URL", "https://voice-calling-agent-1f3f.onrender.com")
+BASE_URL         = os.getenv("BASE_URL", "https://unmagnanimous-undelayingly-laraine.ngrok-free.dev")
 EXOTEL_SID       = os.getenv("EXOTEL_SID")
 EXOTEL_API_KEY   = os.getenv("EXOTEL_API_KEY")
 EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN")
@@ -80,29 +77,26 @@ audio_cache: dict[str, bytes] = {}
 call_in_progress = False
 terminal_logs = []
 
-# ================= FULL TERMINAL CAPTURE =================
+class TerminalCapture:
 
-original_print = builtins.print
+    def write(self, message):
 
-def terminal_print(*args, **kwargs):
-    try:
-        message = " ".join(str(a) for a in args)
+        message = str(message).strip()
 
-        # console માં print
-        original_print(*args, **kwargs)
+        if message:
+            terminal_logs.append(message)
 
-        # dashboard logs માં save
-        terminal_logs.append(message)
-
-        # limit
-        if len(terminal_logs) > 1000:
+        # keep last 300 logs
+        if len(terminal_logs) > 300:
             terminal_logs.pop(0)
 
-    except Exception as e:
-        original_print("LOGGER ERROR:", e)
+        sys.__stdout__.write(message + "\n")
 
-# override global print
-builtins.print = terminal_print
+    def flush(self):
+        pass
+
+sys.stdout = TerminalCapture()
+sys.stderr = TerminalCapture()    
 
 # ================= LOAD CLIENTS =================
 def load_clients():
@@ -136,8 +130,8 @@ def get_client_key(client: dict) -> str:
     return str(phone).strip().replace("+", "").replace(" ", "")
 
 
-def get_audio_cache_path(client_key: str): 
-    return os.path.join(BASE_DIR, "static", "audio", f"{client_key}.wav")
+def get_audio_cache_path(client_key: str) -> str:
+    return os.path.join(AUDIO_CACHE_DIR, f"{client_key}.pcm")
 
 
 def build_pitch_text(client: dict) -> str:
@@ -208,7 +202,7 @@ async def preload_all_static_audio():
         pitch_text  = build_pitch_text(client)
 
         # Load from disk if already cached
-        if os.path.exists(cache_path):
+        if False and os.path.exists(cache_path):
             with open(cache_path, "rb") as f:
                 pcm_8k = f.read()
             if pcm_8k:
@@ -220,10 +214,6 @@ async def preload_all_static_audio():
 
     async def _generate_one(client_key, cache_path, pitch_text):
         audio_16k = await generate_sarvam_audio_bytes(pitch_text)
-        print("🎤 Generating audio for:", client_key) 
-        print("📝 Text:", pitch_text) 
-        print("🎧 Audio bytes:", len(audio_16k) if audio_16k else 0)
-        print("📁 Saving WAV:", cache_path)
         if not audio_16k:
             print(f"  ❌ TTS failed for {client_key}")
             return
@@ -232,12 +222,8 @@ async def preload_all_static_audio():
             print(f"  ❌ Resample failed for {client_key}")
             return
         # Save to disk
-        os.makedirs( os.path.dirname(cache_path), exist_ok=True )
-        with wave.open(cache_path, "wb") as wav_file: 
-            wav_file.setnchannels(1) 
-            wav_file.setsampwidth(2) 
-            wav_file.setframerate(8000) 
-            wav_file.writeframes(pcm_8k)
+        with open(cache_path, "wb") as f:
+            f.write(pcm_8k)
         # Load into memory
         audio_cache[client_key] = pcm_8k
         print(f"  ✅ Generated & saved: {client_key} ({len(pcm_8k)} bytes)")
@@ -331,158 +317,155 @@ async def finalize_call_session(call_sid, session_conversation):
 #
 # ================================================================
 
-CHUNK_BYTES = 3200   # 20 ms @ 8 kHz 16-bit mono
+CHUNK_BYTES = 640   # 20 ms @ 8 kHz 16-bit mono
 
 
 @app.websocket("/voicebot")
 async def voicebot_ws(websocket: WebSocket):
-
     await websocket.accept()
 
-    call_sid = websocket.query_params.get("call_sid") or None
+    call_sid             = websocket.query_params.get("call_sid") or None
+    stream_sid           = None
     session_conversation = []
 
     load_clients()
-
     client = active_client_data if active_client_data else (
         clients[current_index] if current_index < len(clients) else {}
     )
 
-    # Load cached audio
+    # Load pitch audio from cache — zero latency, no API call
     pitch_audio = get_cached_audio(client)
-
     if not pitch_audio:
-        print(f"❌ No pitch audio available for call {call_sid}")
+        print(f"❌ No pitch audio available for call {call_sid} — hanging up")
         await websocket.close()
         return
 
-    print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes")
+    print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes (loaded from cache)")
 
-    # =========================================================
-    # SEND AUDIO CHUNK
-    # =========================================================
-    
     async def send_chunk(chunk: bytes):
+        nonlocal stream_sid
 
-        remainder = len(chunk) % 320
+        if not stream_sid:
+            return
 
+        remainder = len(chunk) % CHUNK_BYTES
         if remainder:
-            chunk += b'\x00' * (320 - remainder)
-
-        payload = base64.b64encode(chunk).decode()
+            chunk += b'\x00' * (CHUNK_BYTES - remainder)
 
         await websocket.send_text(json.dumps({
             "event": "media",
+            "stream_sid": stream_sid,
             "media": {
-                "payload": payload
+                "payload": base64.b64encode(chunk).decode()
             }
         }))
 
-
-
-    # =========================================================
-    # STREAM AUDIO
-    # =========================================================
     try:
+        while True:
+            try:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+            except asyncio.TimeoutError:
+                print(f"⏱️ WebSocket timeout for call {call_sid}")
+                break
 
-        print("⚡ WebSocket connected — streaming pitch instantly")
+            msg   = json.loads(raw)
+            event = msg.get("event")
 
-        frame_index = 0
-        start_time = asyncio.get_event_loop().time()
+            # Capture stream_sid from any event that carries it
+            if not stream_sid:
+                stream_sid = msg.get("stream_sid") or msg.get("streamSid")
 
-        for i in range(0, len(pitch_audio), CHUNK_BYTES):
+            if event in ("stop", "disconnect"):
+                print(f"📴 Call ended: {event}")
+                break
 
-            chunk = pitch_audio[i:i + CHUNK_BYTES]
+            if event == "media":
+                # Grab stream_sid from nested media payload if not set yet
+                if not stream_sid:
+                    stream_sid = msg.get("stream_sid") or msg.get("streamSid")
 
-            await send_chunk(chunk)
+                print(f"⚡ First media received — streaming cached pitch instantly")
 
-            frame_index += 1
+                frame_index = 0
+                start_time = asyncio.get_event_loop().time()
 
-            next_time = start_time + frame_index * 0.1
-            now = asyncio.get_event_loop().time()
+                for i in range(0, len(pitch_audio), CHUNK_BYTES):
+                    chunk = pitch_audio[i:i + CHUNK_BYTES]
 
-            delay = next_time - now
+                    await send_chunk(chunk)
 
-            if delay > 0:
-                await asyncio.sleep(delay)
+                    frame_index += 1
+                    next_time = start_time + frame_index * 0.02
+                    now = asyncio.get_event_loop().time()
 
-        print("✅ Pitch delivered")
+                    delay = next_time - now
+                    if delay > 0:
+                        await asyncio.sleep(delay)
 
-        transfer_pending[call_sid] = True
+                print("✅ Pitch delivered — triggering transfer")
+                transfer_pending[call_sid] = True
 
-        # wait before close
-        await asyncio.sleep(1)
+                print("⏳ Waiting before clean transfer...")
 
-        # silent chunk
-        await send_chunk(b'\x00' * CHUNK_BYTES)
+                # IMPORTANT: give Exotel time to process last packets
+                await asyncio.sleep(1)
 
-        await asyncio.sleep(0.2)
+                # send a silent chunk (stabilizes stream)
+                await send_chunk(b'\x00' * CHUNK_BYTES)
 
-        await websocket.close()
+                # NOW close cleanly
+                await websocket.close()
 
-        print("🔁 WebSocket closed")
+                print("🔁 WebSocket closed properly for transfer")
+
+                return
 
     except WebSocketDisconnect:
-
         print(f"📴 WebSocket disconnected: {call_sid}")
-
     except Exception as e:
-
         print(f"⚠️ WebSocket error: {e}")
         traceback.print_exc()
-
     finally:
-
         await finalize_call_session(call_sid, session_conversation)
-
         print("🔒 Voicebot session closed")
-
-
 
 
 # ================================================================
 # /voice — Exotel entry point
 # ================================================================
-
-
 @app.api_route("/voice", methods=["GET", "POST"])
 async def voice(request: Request):
+    form = {}
+    try:
+        form = await request.form()
+    except Exception:
+        pass
 
-    global current_client
+    call_sid = (
+        form.get("CallSid")
+        or form.get("CallUUID")
+        or request.query_params.get("CallSid")
+        or request.query_params.get("CallUUID")
+    )
 
-    load_clients()
+    print(f"📞 /voice | CallSid={call_sid} | transfer_pending={call_sid in transfer_pending}")
 
-    client = current_client
-
-    if not client:
-
-        print("❌ No current client")
-
-        return Response(
-            content="<Response><Hangup/></Response>",
-            media_type="application/xml"
-        )
-
-    client_key = get_client_key(client)
-
-    # WAV file URL
-    audio_url = f"{BASE_URL}/static/audio/{client_key}.wav"
-
-    print(f"🎵 Playing audio: {audio_url}")
-
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+    if call_sid and call_sid in transfer_pending:
+        transfer_pending.pop(call_sid, None)
+        print(f"🔁 Transfer to human: {HUMAN_AGENT_NUMBER}")
+        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-
-    <Play>{audio_url}</Play>
-
-    <Dial action="/transfer_fallback" method="POST" timeout="30">
-        {HUMAN_AGENT_NUMBER}
-    </Dial>
-
+    <Dial action="/transfer_fallback" method="POST" timeout="30">{HUMAN_AGENT_NUMBER}</Dial>
 </Response>"""
+        return Response(content=xml, media_type="application/xml")
 
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Voicebot />
+    </Connect>
+</Response>"""
     return Response(content=xml, media_type="application/xml")
-
 
 
 # ================= STATUS CALLBACK =================
@@ -550,8 +533,7 @@ async def call_status(request: Request):
 
 # ================= CALL LOGIC =================
 def make_call(to_number, client=None):
-    global current_call_sid, call_status_ui, call_in_progress, current_client
-    
+    global current_call_sid, call_status_ui, call_in_progress
 
     call_status_ui = "Ringing"
     call_in_progress = True   # ✅ ADD THIS
@@ -572,12 +554,12 @@ def make_call(to_number, client=None):
     print("📲 Calling:", to_number)
 
     response = requests.post(url, data=payload, auth=(EXOTEL_API_KEY, EXOTEL_API_TOKEN))
-    call_sid = response.json()["Call"]["Sid"] 
-    call_client_map[call_sid] = client 
-    current_call_sid = call_sid
     print("Exotel response:", response.text)
 
-    
+    try:
+        current_call_sid = response.json()["Call"]["Sid"]
+    except Exception:
+        print("⚠️ Could not parse Exotel response")
 
 
 def auto_call_next():
@@ -628,10 +610,7 @@ async def transfer_fallback(request: Request):
 # ================= DASHBOARD =================
 @app.get("/")
 async def dashboard(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "dashboard.html"
-    )
+    return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
 @app.get("/call_status_ui")
@@ -670,10 +649,7 @@ async def get_clients():
 
 @app.get("/logs")
 async def logs_page(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "logs.html"
-    )
+    return templates.TemplateResponse("logs.html", {"request": request})
 
 
 @app.get("/api/logs")
@@ -853,7 +829,6 @@ async def delete_all_clients():
         return JSONResponse({
             "status": str(e)
         })
-
 
 # ================= STARTUP =================
 @app.on_event("startup")
