@@ -4,6 +4,7 @@ import csv
 import io
 import base64
 import json
+import sys
 import traceback
 import urllib.parse
 import requests
@@ -26,7 +27,6 @@ from session_logger_json import save_call_session_json
 from conversation_state import clear_history
 from fastapi import UploadFile, File
 import shutil
-import builtins
 
 # ================= APP SETUP =================
 http_client = httpx.AsyncClient(timeout=30)
@@ -77,29 +77,26 @@ audio_cache: dict[str, bytes] = {}
 call_in_progress = False
 terminal_logs = []
 
-# ================= FULL TERMINAL CAPTURE =================
+class TerminalCapture:
 
-original_print = builtins.print
+    def write(self, message):
 
-def terminal_print(*args, **kwargs):
-    try:
-        message = " ".join(str(a) for a in args)
+        message = str(message).strip()
 
-        # console માં print
-        original_print(*args, **kwargs)
+        if message:
+            terminal_logs.append(message)
 
-        # dashboard logs માં save
-        terminal_logs.append(message)
-
-        # limit
-        if len(terminal_logs) > 1000:
+        # keep last 300 logs
+        if len(terminal_logs) > 300:
             terminal_logs.pop(0)
 
-    except Exception as e:
-        original_print("LOGGER ERROR:", e)
+        sys.__stdout__.write(message + "\n")
 
-# override global print
-builtins.print = terminal_print
+    def flush(self):
+        pass
+
+sys.stdout = TerminalCapture()
+sys.stderr = TerminalCapture()    
 
 # ================= LOAD CLIENTS =================
 def load_clients():
@@ -205,7 +202,7 @@ async def preload_all_static_audio():
         pitch_text  = build_pitch_text(client)
 
         # Load from disk if already cached
-        if os.path.exists(cache_path):
+        if False and os.path.exists(cache_path):
             with open(cache_path, "rb") as f:
                 pcm_8k = f.read()
             if pcm_8k:
@@ -320,7 +317,7 @@ async def finalize_call_session(call_sid, session_conversation):
 #
 # ================================================================
 
-CHUNK_BYTES = 3200   # 20 ms @ 8 kHz 16-bit mono
+CHUNK_BYTES = 640   # 20 ms @ 8 kHz 16-bit mono
 
 
 @app.websocket("/voicebot")
@@ -345,29 +342,23 @@ async def voicebot_ws(websocket: WebSocket):
 
     print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes (loaded from cache)")
 
-    
     async def send_chunk(chunk: bytes):
-
         nonlocal stream_sid
 
         if not stream_sid:
             return
 
-        remainder = len(chunk) % 320
-
+        remainder = len(chunk) % CHUNK_BYTES
         if remainder:
-            chunk += b'\x00' * (320 - remainder)
-
-        payload = base64.b64encode(chunk).decode()
+            chunk += b'\x00' * (CHUNK_BYTES - remainder)
 
         await websocket.send_text(json.dumps({
             "event": "media",
-            "streamSid": stream_sid,
+            "stream_sid": stream_sid,
             "media": {
-                "payload": payload
+                "payload": base64.b64encode(chunk).decode()
             }
         }))
-
 
     try:
         while True:
@@ -404,7 +395,7 @@ async def voicebot_ws(websocket: WebSocket):
                     await send_chunk(chunk)
 
                     frame_index += 1
-                    next_time = start_time + frame_index * 0.1
+                    next_time = start_time + frame_index * 0.02
                     now = asyncio.get_event_loop().time()
 
                     delay = next_time - now
@@ -467,18 +458,13 @@ async def voice(request: Request):
     <Dial action="/transfer_fallback" method="POST" timeout="30">{HUMAN_AGENT_NUMBER}</Dial>
 </Response>"""
         return Response(content=xml, media_type="application/xml")
-    
-    stream_call_sid = call_sid or "unknown"
 
-   
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-    <Response>
-        <Connect>
-            <Stream url="{BASE_URL.replace('https://', 'wss://')}/voicebot?call_sid={stream_call_sid}" />
-        </Connect>
-    </Response>"""
-
-
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Voicebot />
+    </Connect>
+</Response>"""
     return Response(content=xml, media_type="application/xml")
 
 
@@ -624,11 +610,7 @@ async def transfer_fallback(request: Request):
 # ================= DASHBOARD =================
 @app.get("/")
 async def dashboard(request: Request):
-    
-    return templates.TemplateResponse(
-        request,
-        "dashboard.html"
-    )
+    return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
 @app.get("/call_status_ui")
@@ -667,13 +649,7 @@ async def get_clients():
 
 @app.get("/logs")
 async def logs_page(request: Request):
- 
-    return templates.TemplateResponse(
-        request,
-        "logs.html"
-    )
-
-
+    return templates.TemplateResponse("logs.html", {"request": request})
 
 
 @app.get("/api/logs")
@@ -853,7 +829,6 @@ async def delete_all_clients():
         return JSONResponse({
             "status": str(e)
         })
-
 
 # ================= STARTUP =================
 @app.on_event("startup")
