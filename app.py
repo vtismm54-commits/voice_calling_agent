@@ -29,6 +29,8 @@ import shutil
 import builtins
 import wave
 
+call_client_map = {}
+current_client = None
 # ================= APP SETUP =================
 http_client = httpx.AsyncClient(timeout=30)
 app = FastAPI()
@@ -442,12 +444,24 @@ async def voicebot_ws(websocket: WebSocket):
 # /voice — Exotel entry point
 # ================================================================
 
+
 @app.api_route("/voice", methods=["GET", "POST"])
 async def voice(request: Request):
 
+    global current_client
+
     load_clients()
 
-    client = clients[current_index]
+    client = current_client
+
+    if not client:
+
+        print("❌ No current client")
+
+        return Response(
+            content="<Response><Hangup/></Response>",
+            media_type="application/xml"
+        )
 
     client_key = get_client_key(client)
 
@@ -536,7 +550,8 @@ async def call_status(request: Request):
 
 # ================= CALL LOGIC =================
 def make_call(to_number, client=None):
-    global current_call_sid, call_status_ui, call_in_progress
+    global current_call_sid, call_status_ui, call_in_progress, current_client
+    
 
     call_status_ui = "Ringing"
     call_in_progress = True   # ✅ ADD THIS
@@ -557,12 +572,12 @@ def make_call(to_number, client=None):
     print("📲 Calling:", to_number)
 
     response = requests.post(url, data=payload, auth=(EXOTEL_API_KEY, EXOTEL_API_TOKEN))
+    call_sid = response.json()["Call"]["Sid"] 
+    call_client_map[call_sid] = client 
+    current_call_sid = call_sid
     print("Exotel response:", response.text)
 
-    try:
-        current_call_sid = response.json()["Call"]["Sid"]
-    except Exception:
-        print("⚠️ Could not parse Exotel response")
+    
 
 
 def auto_call_next():
