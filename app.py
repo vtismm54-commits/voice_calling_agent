@@ -432,41 +432,34 @@ async def voicebot_ws(websocket: WebSocket):
 # ================================================================
 # /voice — Exotel entry point
 # ================================================================
+
 @app.api_route("/voice", methods=["GET", "POST"])
 async def voice(request: Request):
-    form = {}
-    try:
-        form = await request.form()
-    except Exception:
-        pass
 
-    call_sid = (
-        form.get("CallSid")
-        or form.get("CallUUID")
-        or request.query_params.get("CallSid")
-        or request.query_params.get("CallUUID")
-    )
+    load_clients()
 
-    print(f"📞 /voice | CallSid={call_sid} | transfer_pending={call_sid in transfer_pending}")
+    client = clients[current_index]
 
-    if call_sid and call_sid in transfer_pending:
-        transfer_pending.pop(call_sid, None)
-        print(f"🔁 Transfer to human: {HUMAN_AGENT_NUMBER}")
-        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Dial action="/transfer_fallback" method="POST" timeout="30">{HUMAN_AGENT_NUMBER}</Dial>
-</Response>"""
-        return Response(content=xml, media_type="application/xml")
-    
-    stream_call_sid = call_sid or "unknown"
+    client_key = get_client_key(client)
+
+    # WAV file URL
+    audio_url = f"{BASE_URL}/static/audio/{client_key}.wav"
+
+    print(f"🎵 Playing audio: {audio_url}")
 
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Connect>
-        <Stream url="wss://voice-calling-agent-1f3f.onrender.com/voicebot?call_sid={stream_call_sid}" />
-    </Connect>
+
+    <Play>{audio_url}</Play>
+
+    <Dial action="/transfer_fallback" method="POST" timeout="30">
+        {HUMAN_AGENT_NUMBER}
+    </Dial>
+
 </Response>"""
+
     return Response(content=xml, media_type="application/xml")
+
 
 
 # ================= STATUS CALLBACK =================
