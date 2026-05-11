@@ -320,7 +320,7 @@ async def finalize_call_session(call_sid, session_conversation):
 #
 # ================================================================
 
-CHUNK_BYTES = 640   # 20 ms @ 8 kHz 16-bit mono
+CHUNK_BYTES = 3200   # 20 ms @ 8 kHz 16-bit mono
 
 
 @app.websocket("/voicebot")
@@ -350,14 +350,24 @@ async def voicebot_ws(websocket: WebSocket):
     # =========================================================
     # SEND AUDIO CHUNK
     # =========================================================
+    
     async def send_chunk(chunk: bytes):
 
-        remainder = len(chunk) % CHUNK_BYTES
+        remainder = len(chunk) % 320
 
         if remainder:
-            chunk += b'\x00' * (CHUNK_BYTES - remainder)
+            chunk += b'\x00' * (320 - remainder)
 
-        await websocket.send_bytes(chunk)
+        payload = base64.b64encode(chunk).decode()
+
+        await websocket.send_text(json.dumps({
+            "event": "media",
+            "media": {
+                "payload": payload
+            }
+        }))
+
+
 
     # =========================================================
     # STREAM AUDIO
@@ -377,7 +387,7 @@ async def voicebot_ws(websocket: WebSocket):
 
             frame_index += 1
 
-            next_time = start_time + frame_index * 0.02
+            next_time = start_time + frame_index * 0.1
             now = asyncio.get_event_loop().time()
 
             delay = next_time - now
