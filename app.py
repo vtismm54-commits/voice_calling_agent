@@ -27,6 +27,7 @@ from conversation_state import clear_history
 from fastapi import UploadFile, File
 import shutil
 import builtins
+import wave
 
 # ================= APP SETUP =================
 http_client = httpx.AsyncClient(timeout=30)
@@ -133,8 +134,8 @@ def get_client_key(client: dict) -> str:
     return str(phone).strip().replace("+", "").replace(" ", "")
 
 
-def get_audio_cache_path(client_key: str) -> str:
-    return os.path.join(AUDIO_CACHE_DIR, f"{client_key}.pcm")
+def get_audio_cache_path(client_key: str): 
+    return os.path.join(BASE_DIR, "static", "audio", f"{client_key}.wav")
 
 
 def build_pitch_text(client: dict) -> str:
@@ -225,8 +226,11 @@ async def preload_all_static_audio():
             print(f"  ❌ Resample failed for {client_key}")
             return
         # Save to disk
-        with open(cache_path, "wb") as f:
-            f.write(pcm_8k)
+        with wave.open(cache_path, "wb") as wav_file: 
+            wav_file.setnchannels(1) 
+            wav_file.setsampwidth(2) 
+            wav_file.setframerate(8000) 
+            wav_file.writeframes(pcm_8k)
         # Load into memory
         audio_cache[client_key] = pcm_8k
         print(f"  ✅ Generated & saved: {client_key} ({len(pcm_8k)} bytes)")
