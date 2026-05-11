@@ -325,106 +325,98 @@ CHUNK_BYTES = 640   # 20 ms @ 8 kHz 16-bit mono
 
 @app.websocket("/voicebot")
 async def voicebot_ws(websocket: WebSocket):
+
     await websocket.accept()
 
-    call_sid             = websocket.query_params.get("call_sid") or None
-    stream_sid           = None
+    call_sid = websocket.query_params.get("call_sid") or None
     session_conversation = []
 
     load_clients()
+
     client = active_client_data if active_client_data else (
         clients[current_index] if current_index < len(clients) else {}
     )
 
-    # Load pitch audio from cache — zero latency, no API call
+    # Load cached audio
     pitch_audio = get_cached_audio(client)
+
     if not pitch_audio:
-        print(f"❌ No pitch audio available for call {call_sid} — hanging up")
+        print(f"❌ No pitch audio available for call {call_sid}")
         await websocket.close()
         return
 
-    print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes (loaded from cache)")
+    print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes")
 
+    # =========================================================
+    # SEND AUDIO CHUNK
+    # =========================================================
     async def send_chunk(chunk: bytes):
-        nonlocal stream_sid
-
-        if not stream_sid:
-            return
 
         remainder = len(chunk) % CHUNK_BYTES
+
         if remainder:
             chunk += b'\x00' * (CHUNK_BYTES - remainder)
 
         await websocket.send_bytes(chunk)
 
+    # =========================================================
+    # STREAM AUDIO
+    # =========================================================
     try:
-        while True:
-            try:
-                raw = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-            except asyncio.TimeoutError:
-                print(f"⏱️ WebSocket timeout for call {call_sid}")
-                break
 
-            msg   = json.loads(raw)
-            event = msg.get("event")
+        print("⚡ WebSocket connected — streaming pitch instantly")
 
-            # Capture stream_sid from any event that carries it
-            if not stream_sid:
-                stream_sid = msg.get("stream_sid") or msg.get("streamSid")
+        frame_index = 0
+        start_time = asyncio.get_event_loop().time()
 
-            if event in ("stop", "disconnect"):
-                print(f"📴 Call ended: {event}")
-                break
+        for i in range(0, len(pitch_audio), CHUNK_BYTES):
 
-            if event == "media":
-                # Grab stream_sid from nested media payload if not set yet
-                if not stream_sid:
-                    stream_sid = msg.get("stream_sid") or msg.get("streamSid")
+            chunk = pitch_audio[i:i + CHUNK_BYTES]
 
-                print(f"⚡ First media received — streaming cached pitch instantly")
+            await send_chunk(chunk)
 
-                frame_index = 0
-                start_time = asyncio.get_event_loop().time()
+            frame_index += 1
 
-                for i in range(0, len(pitch_audio), CHUNK_BYTES):
-                    chunk = pitch_audio[i:i + CHUNK_BYTES]
+            next_time = start_time + frame_index * 0.02
+            now = asyncio.get_event_loop().time()
 
-                    await send_chunk(chunk)
+            delay = next_time - now
 
-                    frame_index += 1
-                    next_time = start_time + frame_index * 0.02
-                    now = asyncio.get_event_loop().time()
+            if delay > 0:
+                await asyncio.sleep(delay)
 
-                    delay = next_time - now
-                    if delay > 0:
-                        await asyncio.sleep(delay)
+        print("✅ Pitch delivered")
 
-                print("✅ Pitch delivered — triggering transfer")
-                transfer_pending[call_sid] = True
+        transfer_pending[call_sid] = True
 
-                print("⏳ Waiting before clean transfer...")
+        # wait before close
+        await asyncio.sleep(1)
 
-                # IMPORTANT: give Exotel time to process last packets
-                await asyncio.sleep(1)
+        # silent chunk
+        await send_chunk(b'\x00' * CHUNK_BYTES)
 
-                # send a silent chunk (stabilizes stream)
-                await send_chunk(b'\x00' * CHUNK_BYTES)
+        await asyncio.sleep(0.2)
 
-                # NOW close cleanly
-                await websocket.close()
+        await websocket.close()
 
-                print("🔁 WebSocket closed properly for transfer")
-
-                return
+        print("🔁 WebSocket closed")
 
     except WebSocketDisconnect:
+
         print(f"📴 WebSocket disconnected: {call_sid}")
+
     except Exception as e:
+
         print(f"⚠️ WebSocket error: {e}")
         traceback.print_exc()
+
     finally:
+
         await finalize_call_session(call_sid, session_conversation)
+
         print("🔒 Voicebot session closed")
+
+
 
 
 # ================================================================
