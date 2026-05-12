@@ -326,7 +326,7 @@ CHUNK_DURATION_S = CHUNK_BYTES / (8000 * 2)  # = 0.200 seconds
 
 @app.websocket("/voicebot")
 async def voicebot_ws(websocket: WebSocket):
-    print("🔥 WEBSOCKET CONNECTED 🔥")
+    print("🔥 WEBSOCKET CONNECTED 🔥") 
     await websocket.accept()
 
     # call_sid / stream_sid extracted from the "start" event body sent by Exotel
@@ -446,6 +446,53 @@ async def voicebot_ws(websocket: WebSocket):
     finally:
         await finalize_call_session(call_sid, session_conversation)
         print("🔒 Voicebot session closed")
+
+
+# ================================================================
+# /voicebot_url — Exotel App Bazaar Dynamic URL handler
+# ================================================================
+#
+# HOW EXOTEL APP BAZAAR VOICEBOT WORKS WITH https:// URL:
+#
+#   Step 1 → Exotel makes HTTP GET to the URL you put in App Bazaar dashboard
+#   Step 2 → Your server must respond with JSON: {"url": "wss://..."}
+#   Step 3 → Exotel opens WebSocket to that wss:// URL
+#   Step 4 → Your /voicebot WebSocket handler fires
+#
+# This is why /voicebot (WebSocket endpoint) was NEVER being hit:
+# Exotel was sending an HTTP GET to it, getting 403, and giving up.
+#
+# CONFIGURE IN EXOTEL APP BAZAAR VOICEBOT APPLET:
+#   https://voice-calling-agent-1f3f.onrender.com/voicebot_url
+#
+# ================================================================
+@app.api_route("/voicebot_url", methods=["GET", "POST"])
+async def voicebot_url_handler(request: Request):
+    """
+    Exotel App Bazaar Dynamic URL handler.
+    Exotel GETs this endpoint and expects JSON with {"url": "wss://..."}.
+    Exotel then opens the WebSocket to that wss:// URL.
+    """
+    # Try to get CallSid from query params or form (Exotel may send it)
+    call_sid = request.query_params.get("CallSid") or request.query_params.get("call_sid")
+    if not call_sid:
+        try:
+            form = await request.form()
+            call_sid = form.get("CallSid") or form.get("call_sid") or ""
+        except Exception:
+            call_sid = ""
+
+    wss_url = BASE_URL.replace("https://", "wss://") + "/voicebot"
+    if call_sid:
+        wss_url += f"?call_sid={call_sid}"
+
+    print(f"📡 /voicebot_url → returning WSS URL for call_sid={call_sid or 'unknown'}")
+    print(f"   URL: {wss_url}")
+
+    return JSONResponse(
+        content={"url": wss_url},
+        headers={"Content-Type": "application/json"}
+    )
 
 
 # ================================================================
