@@ -900,31 +900,56 @@ async def get_terminal_logs():
 
 @app.post("/upload_csv")
 async def upload_csv(file: UploadFile = File(...)):
-    global clients
+    global clients, current_index, paused, call_in_progress, active_client_data
 
     try:
-        # save uploaded csv
+        # ── Step 1: Save the new CSV file ─────────────────────────────────────
         with open(CLIENTS_FILE, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        print("📂 New CSV saved to disk")
 
-        # reload clients instantly
-        load_clients()
+        # ── Step 2: Reset ALL calling state ───────────────────────────────────
+        # Without this, bot keeps calling from old index and active_client_data
+        # may still point to a client from the previous CSV.
+        current_index      = 0
+        paused             = False
+        call_in_progress   = False
+        active_client_data = None
+        print("🔄 Calling state reset (index=0, paused=False)")
 
-        # clear old audio cache
+        # ── Step 3: Clear memory audio cache ──────────────────────────────────
         audio_cache.clear()
+        print("🗑️ Memory audio cache cleared")
 
-        # regenerate audio automatically
+        # ── Step 4: Delete ALL old .pcm disk files ────────────────────────────
+        # Critical: old .pcm files contain audio with the previous client names.
+        # The WebSocket handler's disk-fallback would reload and play old names
+        # if these files are not deleted before regenerating.
+        deleted_count = 0
+        for fname in os.listdir(AUDIO_CACHE_DIR):
+            if fname.endswith(".pcm"):
+                os.remove(os.path.join(AUDIO_CACHE_DIR, fname))
+                deleted_count += 1
+        print(f"🗑️ Deleted {deleted_count} old .pcm disk files")
+
+        # ── Step 5: Reload client list from new CSV ───────────────────────────
+        load_clients()
+        print(f"👥 Loaded {len(clients)} clients from new CSV")
+
+        # ── Step 6: Pre-generate fresh audio for all new clients ──────────────
         await preload_all_static_audio()
 
         return JSONResponse({
-            "status": "CSV uploaded successfully"
+            "status"            : "✅ CSV uploaded & audio regenerated",
+            "clients_loaded"    : len(clients),
+            "audio_cached"      : len(audio_cache),
+            "old_files_deleted" : deleted_count,
         })
 
     except Exception as e:
-        return JSONResponse({
-            "status": str(e)
-        })
-    
+        print(f"❌ upload_csv error: {e}")
+        return JSONResponse({"status": f"Error: {e}"}, status_code=500)
+
 
 @app.delete("/delete_all_clients")
 async def delete_all_clients():
