@@ -326,7 +326,7 @@ CHUNK_DURATION_S = CHUNK_BYTES / (8000 * 2)  # = 0.200 seconds
 
 @app.websocket("/voicebot")
 async def voicebot_ws(websocket: WebSocket):
-    print("🔥 WEBSOCKET CONNECTED 🔥") 
+    print("🔥 WEBSOCKET CONNECTED 🔥")
     await websocket.accept()
 
     # call_sid / stream_sid extracted from the "start" event body sent by Exotel
@@ -340,20 +340,45 @@ async def voicebot_ws(websocket: WebSocket):
         clients[current_index] if current_index < len(clients) else {}
     )
 
-    # Load pitch audio from cache — zero latency, no API call
+    client_key = get_client_key(client)
+    print(f"🧑 Client for this call: key={client_key} | data={client}")
+
+    # Load pitch audio — retry from disk if not in memory cache
     pitch_audio = get_cached_audio(client)
+
+    # ── CAUSE 2 FIX: Cache miss retry ──────────────────────────────────────
+    # If not in memory, try loading directly from disk (Render restart may
+    # have cleared memory but disk file still exists from previous run).
     if not pitch_audio:
-        print("❌ No pitch audio available — closing WebSocket")
+        cache_path = get_audio_cache_path(client_key)
+        if os.path.exists(cache_path):
+            with open(cache_path, "rb") as f:
+                pitch_audio = f.read()
+            if pitch_audio:
+                audio_cache[client_key] = pitch_audio  # reload into memory
+                print(f"✅ Recovered audio from disk: {client_key} ({len(pitch_audio)} bytes)")
+
+    if not pitch_audio:
+        print(f"❌ No pitch audio for client_key={client_key} — closing WebSocket")
+        print(f"   Clients loaded: {len(clients)} | current_index={current_index}")
+        print(f"   Audio cache keys: {list(audio_cache.keys())}")
         await websocket.close()
         return
 
-    print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes (loaded from cache)")
+    audio_duration_s = len(pitch_audio) / (8000 * 2)   # seconds of audio
+    print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes | duration={audio_duration_s:.1f}s")
 
     async def stream_pitch_audio(sid: str):
         """Send entire pitch PCM in correctly-paced 3200-byte chunks.
-        
-        FIX: stream_sid is now included in every outgoing packet (Bug 2 fix).
-        FIX: pacing uses CHUNK_DURATION_S = 0.2 s, not 0.1 s (Bug 4 fix).
+
+        CRITICAL FIX — WHY TRANSFER WAS HAPPENING BEFORE AUDIO FINISHED:
+        Closing the WebSocket signals App Bazaar to run the next applet (Dial).
+        But Exotel buffers audio and plays it AFTER it's received. If we close
+        the socket immediately after sending the last chunk, the call transfers
+        WHILE the client is still hearing the audio.
+
+        Fix: After sending all chunks, wait for the full audio duration to
+        elapse (so it finishes playing on the client's handset), THEN close.
         """
         frame_index = 0
         t0 = asyncio.get_event_loop().time()
@@ -369,17 +394,28 @@ async def voicebot_ws(websocket: WebSocket):
             payload = base64.b64encode(chunk).decode()
             await websocket.send_text(json.dumps({
                 "event"     : "media",
-                "stream_sid": sid,        # ← REQUIRED by Exotel
+                "stream_sid": sid,
                 "media"     : {"payload": payload}
             }))
 
             frame_index += 1
-            # Wait until the wall-clock time when this frame should have played out
             delay = t0 + frame_index * CHUNK_DURATION_S - asyncio.get_event_loop().time()
             if delay > 0:
                 await asyncio.sleep(delay)
 
-        # Send one silent frame to flush Exotel's playout buffer
+        print("📤 All audio chunks sent — waiting for playback to finish on client handset...")
+
+        # ── CAUSE 3 FIX: Wait for full audio to finish playing ──────────────
+        # We've sent all bytes but Exotel hasn't finished playing them yet.
+        # audio_duration_s = how long the message takes to speak.
+        # We already spent ~audio_duration_s streaming (paced delivery), so
+        # only a short tail buffer is needed for the jitter buffer to drain.
+        # Adding 1.5s extra margin for network jitter + Exotel buffer flush.
+        playback_wait = max(0.0, audio_duration_s - (asyncio.get_event_loop().time() - t0)) + 1.5
+        print(f"⏳ Waiting {playback_wait:.1f}s for audio to finish playing...")
+        await asyncio.sleep(playback_wait)
+
+        # Send a silence tail to flush Exotel's playout buffer
         silence_payload = base64.b64encode(b'\x00' * CHUNK_BYTES).decode()
         await websocket.send_text(json.dumps({
             "event"     : "media",
@@ -387,15 +423,14 @@ async def voicebot_ws(websocket: WebSocket):
             "media"     : {"payload": silence_payload}
         }))
 
-        print("✅ Pitch delivered — triggering transfer")
+        print("✅ Pitch fully played — closing WebSocket → App Bazaar will dial agent")
 
         if call_sid:
             transfer_pending[call_sid] = True
 
-        # Brief pause so the silence frame clears the buffer before we close
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)   # let silence frame clear the buffer
         await websocket.close()
-        print("🔁 WebSocket closed properly")
+        print("🔁 WebSocket closed — transfer will now execute")
 
     try:
         while True:
