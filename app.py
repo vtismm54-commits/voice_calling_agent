@@ -320,18 +320,15 @@ async def finalize_call_session(call_sid, session_conversation):
 #
 # ================================================================
 
-CHUNK_BYTES = 3200                          # 200 ms @ 8 kHz 16-bit mono
-CHUNK_DURATION_S = CHUNK_BYTES / (8000 * 2)  # = 0.200 seconds
+CHUNK_BYTES = 3200   # 20 ms @ 8 kHz 16-bit mono
 
 
 @app.websocket("/voicebot")
 async def voicebot_ws(websocket: WebSocket):
     await websocket.accept()
 
-    # call_sid / stream_sid extracted from the "start" event body sent by Exotel
-    call_sid             = None
+    call_sid             = websocket.query_params.get("call_sid") or None
     stream_sid           = None
-    audio_sent           = False
     session_conversation = []
 
     load_clients()
@@ -342,103 +339,98 @@ async def voicebot_ws(websocket: WebSocket):
     # Load pitch audio from cache — zero latency, no API call
     pitch_audio = get_cached_audio(client)
     if not pitch_audio:
-        print("❌ No pitch audio available — closing WebSocket")
+        print(f"❌ No pitch audio available for call {call_sid} — hanging up")
         await websocket.close()
         return
 
     print(f"✅ Pitch audio ready: {len(pitch_audio)} bytes (loaded from cache)")
 
-    async def stream_pitch_audio(sid: str):
-        """Send entire pitch PCM in correctly-paced 3200-byte chunks.
-        
-        FIX: stream_sid is now included in every outgoing packet (Bug 2 fix).
-        FIX: pacing uses CHUNK_DURATION_S = 0.2 s, not 0.1 s (Bug 4 fix).
-        """
-        frame_index = 0
-        t0 = asyncio.get_event_loop().time()
+    
+    async def send_chunk(chunk: bytes):
 
-        for i in range(0, len(pitch_audio), CHUNK_BYTES):
-            chunk = pitch_audio[i:i + CHUNK_BYTES]
+        remainder = len(chunk) % 320
 
-            # Pad final chunk to a multiple of 320 bytes
-            remainder = len(chunk) % 320
-            if remainder:
-                chunk += b'\x00' * (320 - remainder)
+        if remainder:
+            chunk += b'\x00' * (320 - remainder)
 
-            payload = base64.b64encode(chunk).decode()
-            await websocket.send_text(json.dumps({
-                "event"     : "media",
-                "stream_sid": sid,        # ← REQUIRED by Exotel
-                "media"     : {"payload": payload}
-            }))
+        payload = base64.b64encode(chunk).decode()
 
-            frame_index += 1
-            # Wait until the wall-clock time when this frame should have played out
-            delay = t0 + frame_index * CHUNK_DURATION_S - asyncio.get_event_loop().time()
-            if delay > 0:
-                await asyncio.sleep(delay)
-
-        # Send one silent frame to flush Exotel's playout buffer
-        silence_payload = base64.b64encode(b'\x00' * CHUNK_BYTES).decode()
         await websocket.send_text(json.dumps({
-            "event"     : "media",
-            "stream_sid": sid,
-            "media"     : {"payload": silence_payload}
+            "event": "media",
+            "media": {
+                "payload": payload
+            }
         }))
 
-        print("✅ Pitch delivered — triggering transfer")
-
-        if call_sid:
-            transfer_pending[call_sid] = True
-
-        # Brief pause so the silence frame clears the buffer before we close
-        await asyncio.sleep(0.5)
-        await websocket.close()
-        print("🔁 WebSocket closed properly")
 
     try:
         while True:
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
             except asyncio.TimeoutError:
-                print(f"⏱️ WebSocket timeout | call_sid={call_sid}")
+                print(f"⏱️ WebSocket timeout for call {call_sid}")
                 break
 
             msg   = json.loads(raw)
             event = msg.get("event")
 
-            print(f"📨 WS event={event} | stream_sid={stream_sid}")
+            # Capture stream_sid from any event that carries it
+            if not stream_sid:
+                stream_sid = msg.get("stream_sid") or msg.get("streamSid")
 
-            if event == "start":
-                # FIX (Bug 2 & 5): Extract both identifiers from the "start" body
-                stream_sid = (
-                    msg.get("stream_sid")
-                    or msg.get("streamSid")
-                    or msg.get("start", {}).get("streamSid")
-                )
-                call_sid = (
-                    msg.get("start", {}).get("call_sid")
-                    or msg.get("start", {}).get("callSid")
-                    or websocket.query_params.get("call_sid")
-                )
-                print(f"🟢 start | stream_sid={stream_sid} | call_sid={call_sid}")
-
-                # FIX (Bug 3): Send audio ONCE on "start", never on "media"
-                if not audio_sent and stream_sid:
-                    audio_sent = True
-                    print("⚡ First start received — streaming cached pitch instantly")
-                    await stream_pitch_audio(stream_sid)
-                    return  # WebSocket closed inside stream_pitch_audio
-
-            elif event in ("stop", "disconnect"):
-                print(f"📴 Call ended via event: {event}")
+            if event in ("stop", "disconnect"):
+                print(f"📴 Call ended: {event}")
                 break
 
-            # "media" = inbound caller audio — intentionally ignored
-            # (we play a one-shot pitch, no STT needed)
+        
+            if event in ("start", "media"):
+
+                if not stream_sid:
+                    stream_sid = (
+                        msg.get("streamSid")
+                        or msg.get("stream_sid")
+                        or msg.get("start", {}).get("streamSid")
+                    )
+
+                print(f"⚡ Streaming cached pitch instantly | event={event}")
+
+                frame_index = 0
+                start_time = asyncio.get_event_loop().time()
+
+                for i in range(0, len(pitch_audio), CHUNK_BYTES):
+
+                    chunk = pitch_audio[i:i + CHUNK_BYTES]
+
+                    await send_chunk(chunk)
+
+                    frame_index += 1
+
+                    next_time = start_time + frame_index * 0.1
+                    now = asyncio.get_event_loop().time()
+
+                    delay = next_time - now
+
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+
+                print("✅ Pitch delivered — triggering transfer")
+
+                transfer_pending[call_sid] = True
+
+                await asyncio.sleep(1)
+
+                await send_chunk(b'\x00' * CHUNK_BYTES)
+
+                await websocket.close()
+
+                print("🔁 WebSocket closed properly")
+
+                return
+
+
 
     except WebSocketDisconnect:
-        print(f"📴 WebSocket disconnected | call_sid={call_sid}")
+        print(f"📴 WebSocket disconnected: {call_sid}")
     except Exception as e:
         print(f"⚠️ WebSocket error: {e}")
         traceback.print_exc()
@@ -568,10 +560,7 @@ def make_call(to_number, client=None):
     payload = {
         "From"          : to_number,
         "CallerId"      : EXOTEL_NUMBER,
-        # FIX (Bug 1): Point to /voice (ExoML Stream), NOT the Voicebot Applet URL.
-        # The Voicebot Applet URL bypasses /voice entirely and ignores your XML.
-        # /voice returns <Connect><Stream url="wss://..."> which is what Exotel needs.
-        "Url"           : BASE_URL + "/voice",
+        "Url"           : "http://my.exotel.com/voicetunesindia1/exoml/start_voice/1199576",
         "TimeOut"       : 30,
         "StatusCallback": BASE_URL + "/status"
     }
@@ -866,38 +855,10 @@ async def delete_all_clients():
         })
 
 
-# ================= HEALTH CHECK =================
-@app.get("/health")
-async def health_check():
-    """Used by Render health check and self-ping keep-alive."""
-    return JSONResponse({"status": "ok", "audio_cached": len(audio_cache)})
-
-
-# ================= SELF-PING KEEP-ALIVE =================
-async def keep_alive_ping():
-    """
-    Pings /health every 5 minutes so Render does NOT spin down the instance.
-    Critical: Exotel's /voice callback has ~10s timeout. A cold-start on Render
-    free tier takes 30-60s → Exotel times out → call completes silently.
-    This background task prevents that sleep entirely.
-    """
-    await asyncio.sleep(10)   # wait for server to fully start
-    while True:
-        try:
-            await asyncio.sleep(300)  # every 5 minutes
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(f"{BASE_URL}/health")
-                print(f"🏓 Self-ping: {r.status_code}")
-        except Exception as e:
-            print(f"⚠️ Keep-alive ping failed: {e}")
-
-
 # ================= STARTUP =================
 @app.on_event("startup")
 async def startup_event():
     await preload_all_static_audio()
-    # Start self-ping keep-alive in background
-    asyncio.create_task(keep_alive_ping())
 
 
 if __name__ == "__main__":
