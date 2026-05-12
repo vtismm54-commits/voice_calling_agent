@@ -382,46 +382,52 @@ async def voicebot_ws(websocket: WebSocket):
                 print(f"📴 Call ended: {event}")
                 break
 
-            if event == "media":
-                # Grab stream_sid from nested media payload if not set yet
-                if not stream_sid:
-                    stream_sid = msg.get("stream_sid") or msg.get("streamSid")
+        
+            if event in ("start", "media"):
 
-                print(f"⚡ First media received — streaming cached pitch instantly")
+                if not stream_sid:
+                    stream_sid = (
+                        msg.get("streamSid")
+                        or msg.get("stream_sid")
+                        or msg.get("start", {}).get("streamSid")
+                    )
+
+                print(f"⚡ Streaming cached pitch instantly | event={event}")
 
                 frame_index = 0
                 start_time = asyncio.get_event_loop().time()
 
                 for i in range(0, len(pitch_audio), CHUNK_BYTES):
+
                     chunk = pitch_audio[i:i + CHUNK_BYTES]
 
                     await send_chunk(chunk)
 
                     frame_index += 1
+
                     next_time = start_time + frame_index * 0.1
                     now = asyncio.get_event_loop().time()
 
                     delay = next_time - now
+
                     if delay > 0:
                         await asyncio.sleep(delay)
 
                 print("✅ Pitch delivered — triggering transfer")
+
                 transfer_pending[call_sid] = True
 
-                print("⏳ Waiting before clean transfer...")
-
-                # IMPORTANT: give Exotel time to process last packets
                 await asyncio.sleep(1)
 
-                # send a silent chunk (stabilizes stream)
                 await send_chunk(b'\x00' * CHUNK_BYTES)
 
-                # NOW close cleanly
                 await websocket.close()
 
-                print("🔁 WebSocket closed properly for transfer")
+                print("🔁 WebSocket closed properly")
 
                 return
+
+
 
     except WebSocketDisconnect:
         print(f"📴 WebSocket disconnected: {call_sid}")
