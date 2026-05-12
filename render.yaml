@@ -3,5 +3,15 @@ services:
     name: voicebot-ai
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
-    plan: free
+    # FIX 1: Single worker (--workers 1) so all in-memory state
+    #   (audio_cache, transfer_pending, active_client_data) is shared.
+    #   Multiple workers = each worker has its own empty memory = bot goes silent.
+    # FIX 2: --timeout-keep-alive 75 keeps WebSocket connections alive
+    #   through Render's load balancer (which closes idle connections at 60s).
+    # FIX 3: --ws websockets explicitly enables WebSocket protocol support.
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 75 --ws websockets
+    # IMPORTANT: Upgrade from free to starter ($7/mo) to prevent cold-start
+    # sleep. Exotel's /voice callback timeout is ~10s. Free tier cold start
+    # takes 30-60s → Exotel times out → call completes silently with no audio.
+    plan: starter
+    healthCheckPath: /health

@@ -866,10 +866,38 @@ async def delete_all_clients():
         })
 
 
+# ================= HEALTH CHECK =================
+@app.get("/health")
+async def health_check():
+    """Used by Render health check and self-ping keep-alive."""
+    return JSONResponse({"status": "ok", "audio_cached": len(audio_cache)})
+
+
+# ================= SELF-PING KEEP-ALIVE =================
+async def keep_alive_ping():
+    """
+    Pings /health every 5 minutes so Render does NOT spin down the instance.
+    Critical: Exotel's /voice callback has ~10s timeout. A cold-start on Render
+    free tier takes 30-60s → Exotel times out → call completes silently.
+    This background task prevents that sleep entirely.
+    """
+    await asyncio.sleep(10)   # wait for server to fully start
+    while True:
+        try:
+            await asyncio.sleep(300)  # every 5 minutes
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(f"{BASE_URL}/health")
+                print(f"🏓 Self-ping: {r.status_code}")
+        except Exception as e:
+            print(f"⚠️ Keep-alive ping failed: {e}")
+
+
 # ================= STARTUP =================
 @app.on_event("startup")
 async def startup_event():
     await preload_all_static_audio()
+    # Start self-ping keep-alive in background
+    asyncio.create_task(keep_alive_ping())
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 fastapi
-uvicorn
+uvicorn[standard]
 gunicorn
 jinja2
 python-dotenv
 httpx
 requests
 python-multipart
-websocket-client
+websockets
